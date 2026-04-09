@@ -1,0 +1,13 @@
+{
+  "name": "operator-hub-search-demand-capture-worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "capture": "node src/capture-source.mjs",
+    "serve-helper": "node src/helper-server.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "^1.58.2"
+  }
+}

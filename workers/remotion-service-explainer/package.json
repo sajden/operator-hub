@@ -1,0 +1,16 @@
+{
+  "name": "operator-hub-remotion-service-explainer-worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "render:job": "node src/render-job.mjs",
+    "preview": "remotion studio src/index.mjs"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.438",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "remotion": "^4.0.438"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "operator-hub-public-preview-capture-worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "capture": "node src/capture-preview.mjs"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "operator-hub-mini-hub",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node server.mjs",
+    "start": "node server.mjs",
+    "remotion:mcp": "remotion-mcp"
+  },
+  "dependencies": {
+    "@remotion/mcp": "4.0.438"
+  }
+}

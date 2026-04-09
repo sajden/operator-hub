@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export CODEX_HOME="${SCRIPT_DIR}/.codex"
+
+# Default runtime policy for this repo so network/search-capable workflows
+# do not require repeating flags in each launch command.
+DEFAULT_ARGS=(
+  "--search"
+  "-s" "workspace-write"
+  "-a" "on-request"
+)
+
+exec codex "${DEFAULT_ARGS[@]}" "$@"

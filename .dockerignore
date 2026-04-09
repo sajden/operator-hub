@@ -1,0 +1,12 @@
+.git
+.codex
+app/node_modules
+app/dist
+app/.vite
+projects/*/exports
+__pycache__
+*.pyc
+*.log
+*.tmp
+.DS_Store
+.local

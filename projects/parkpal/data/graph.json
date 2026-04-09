@@ -1,0 +1,234 @@
+{
+  "project": {
+    "id": "parkpal",
+    "name": "Parkpal",
+    "summary": "Projekt för att identifiera målgrupper, problem, kanaler och outreach-möjligheter.",
+    "strengths": [
+      "Data om parkering",
+      "Data om laddplatser för elbilar"
+    ],
+    "integrations": {
+      "microsoft": {
+        "excelFolder": {
+          "windowsSyncPath": "C:\\Users\\sebas\\OneDrive - Settler Technology AB\\Settler Technology AB - Företag\\ParkPal\\Leads",
+          "shortcutItemId": "01TROW5KRDG6ZCPTOR3FCKSX47VA4UGAMQ",
+          "driveId": "b!6DnMqTiqzUmsbfNUMDB0uwfijgfRbNNDnLArq8xgcZ6M4KMY0zTERqb-qEneaIpg",
+          "rootItemId": "013EXZMZF6Y2GOVW7725BZO354PWSELRRZ",
+          "path": "ParkPal/Leads",
+          "siteUrl": "https://settlerstechnologyab.sharepoint.com/sites/SettlersTechnologyAB",
+          "libraryName": "Fretag",
+          "defaultWorkbookFileId": "013EXZMZFOFDEWLJB3ORD3GKWOPVD3YX6O"
+        }
+      }
+    }
+  },
+  "nodes": [
+    {
+      "id": "project-parkpal",
+      "type": "project",
+      "position": {
+        "x": -214.1116149877971,
+        "y": 260.0763939058746
+      },
+      "data": {
+        "name": "Parkpal",
+        "summary": "Projekt för att identifiera målgrupper, problem, kanaler och outreach-möjligheter.",
+        "strengths": [
+          "Data om parkering",
+          "Data om laddplatser för elbilar"
+        ],
+        "notes": "Första discovery-scope för Parkpal.",
+        "tags": [
+          "parking",
+          "ev"
+        ],
+        "updatedAt": "2026-03-10"
+      }
+    },
+    {
+      "id": "audience-elbilister",
+      "type": "audience",
+      "position": {
+        "x": 110.22539768427885,
+        "y": 299.6306425001799
+      },
+      "data": {
+        "name": "Elbilister",
+        "relevanceWhy": "Parkpal kombinerar data om laddplatser med parkeringskontext i närheten, vilket kan hjälpa förare att fatta bättre beslut kring stopp, laddning och parkering.",
+        "confidenceLevel": "hypotes",
+        "status": "researching",
+        "notes": "Relevant om Parkpal kan visa laddning i ett tydligare parkeringssammanhang än rena laddappar.",
+        "tags": [
+          "ev",
+          "laddning",
+          "parkeringskontext"
+        ],
+        "updatedAt": "2026-03-10"
+      }
+    },
+    {
+      "id": "problem-hitta-laddning",
+      "type": "problem",
+      "position": {
+        "x": -235.09086612517086,
+        "y": -2.2916495339579797
+      },
+      "data": {
+        "name": "Svårt att veta var man kan parkera innan man åker",
+        "confidenceLevel": "hypotes",
+        "status": "new",
+        "notes": "Kärnproblemet är att förstå parkeringssituationen innan man åker till en ny plats.",
+        "tags": [
+          "destination"
+        ],
+        "updatedAt": "2026-03-10"
+      }
+    },
+    {
+      "id": "problem-laddning-parkering-kontext",
+      "type": "problem",
+      "position": {
+        "x": 167.6259337603937,
+        "y": -13.350768084026186
+      },
+      "data": {
+        "name": "Otydligt vad som gäller på platsen",
+        "confidenceLevel": "hypotes",
+        "status": "new",
+        "notes": "Regler, villkor och lokal kontext är ofta det som gör parkering osäker i praktiken.",
+        "tags": [
+          "parkeringskontext"
+        ],
+        "updatedAt": "2026-03-10"
+      }
+    },
+    {
+      "id": "problem-vad-galler-pa-platsen",
+      "type": "problem",
+      "position": {
+        "x": -34.13441734051449,
+        "y": -6.082275826912337
+      },
+      "data": {
+        "name": "Lätt att missa regler, tider eller förändringar",
+        "confidenceLevel": "hypotes",
+        "status": "new",
+        "notes": "Påminnelser och tydligare information kan minska risken att missa sådant som påverkar parkeringen.",
+        "tags": [
+          "villkor",
+          "avgifter",
+          "tidsgräns"
+        ],
+        "updatedAt": "2026-03-10"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-project-to-audience",
+      "source": "project-parkpal",
+      "target": "audience-elbilister",
+      "relationshipType": "targets"
+    },
+    {
+      "id": "edge-project-to-problem-hitta-laddning",
+      "source": "project-parkpal",
+      "target": "problem-hitta-laddning",
+      "relationshipType": "addresses"
+    },
+    {
+      "id": "edge-project-to-problem-laddning-parkering-kontext",
+      "source": "project-parkpal",
+      "target": "problem-laddning-parkering-kontext",
+      "relationshipType": "addresses"
+    },
+    {
+      "id": "edge-project-to-problem-vad-galler-pa-platsen",
+      "source": "project-parkpal",
+      "target": "problem-vad-galler-pa-platsen",
+      "relationshipType": "addresses"
+    }
+  ],
+  "outreach": [
+    {
+      "id": "outreach-ev-reddit-1",
+      "project": "parkpal",
+      "audienceId": "audience-elbilister",
+      "channel": "reddit",
+      "community": "r/elbilsverige",
+      "angle": "Ställ en discovery-fråga om hur elbilsförare väljer praktiska laddstopp när villkor, avgifter eller parkeringskontext är otydliga.",
+      "status": "idea",
+      "notes": "Verifierad svensk subreddit med relevanta trådar om laddplats i BRF, parkeringstider och livet med elbil.",
+      "url": "https://www.reddit.com/r/elbilsverige/"
+    },
+    {
+      "id": "outreach-ev-reddit-2",
+      "project": "parkpal",
+      "audienceId": "",
+      "channel": "reddit",
+      "community": "r/sweden",
+      "angle": "Testa en bredare vinkel om parkering, regler och varningar i vardagen snarare än elbil specifikt.",
+      "status": "idea",
+      "notes": "Brett projektnära spår för generell parkeringstjänst, inte primärt för elbilsmålgruppen.",
+      "url": "https://www.reddit.com/r/sweden/"
+    },
+    {
+      "id": "outreach-ev-reddit-3",
+      "project": "parkpal",
+      "audienceId": "",
+      "channel": "reddit",
+      "community": "r/stockholm",
+      "angle": "Testa storstadsvinkeln: en app som hjälper dig förstå parkeringsregler och varnar när du står på gator du inte får stå på.",
+      "status": "idea",
+      "notes": "Sekundärt projektnära spår för Stockholm och generell parkering, inte primärt EV-spår.",
+      "url": "https://www.reddit.com/r/stockholm/"
+    },
+    {
+      "id": "outreach-ev-elbilsveckan-1",
+      "project": "parkpal",
+      "audienceId": "audience-elbilister",
+      "channel": "forum",
+      "community": "Elbilsveckan",
+      "url": "https://www.elbilsveckan.se/",
+      "angle": "Fråga elbilsförare vilken information de saknar när de ska förstå laddning och parkering i praktiken.",
+      "status": "idea",
+      "notes": "Aktivare EV-spår än äldre forum och därför bättre kandidat för discovery."
+    }
+  ],
+  "content": [
+    {
+      "id": "content-ev-reddit-1",
+      "project": "parkpal",
+      "audienceId": "audience-elbilister",
+      "outreachId": "outreach-ev-reddit-1",
+      "platform": "reddit",
+      "title": "Utkast till inlägg i r/elbilsverige",
+      "body": "Hej!\n\nJag har själv alltid tyckt att det är jobbigt att åka till nya ställen innan man vet var man faktiskt kan parkera. Därför byggde jag ett eget verktyg för att göra det lättare.\n\nNu har jag också kopplat på data om EV-parkeringar och laddplatser i hela Sverige, och jag försöker förstå vad som faktiskt är mest värdefullt för er som kör elbil.\n\nDet jag är nyfiken på är framför allt:\n- vilken information ni oftast saknar idag\n- vad som stör mest när ni ska hitta laddning eller parkering\n- vilka funktioner eller påminnelser som faktiskt hade hjälpt\n\nOm ni vill kan jag dela länken, men mest av allt är jag ute efter ärlig feedback på vad ni faktiskt hade velat se i en sådan tjänst.",
+      "docLink": "",
+      "status": "draft"
+    },
+    {
+      "id": "content-ev-forum-1",
+      "project": "parkpal",
+      "audienceId": "audience-elbilister",
+      "outreachId": "outreach-ev-elbilsveckan-1",
+      "platform": "forum",
+      "title": "Utkast till inlägg på Elbilsveckan",
+      "body": "Hej,\n\nJag byggde ett eget verktyg eftersom jag själv ofta tyckt att det är jobbigt att åka till nya ställen innan jag vet var jag faktiskt kan parkera.\n\nNu har jag även kopplat på data om EV-parkeringar och laddplatser i hela Sverige, och försöker förstå vilken information som faktiskt är mest värdefull för elbilsförare i vardagen.\n\nDet jag gärna vill förstå bättre är:\n- vilken information ni oftast saknar när ni ska välja laddstopp\n- hur viktigt det är att förstå parkering, regler och villkor i samband med laddning\n- vilka funktioner eller påminnelser som faktiskt hade hjälpt\n\nJag delar gärna länk om någon vill testa, men jag är framför allt ute efter ärlig feedback på vad som faktiskt vore användbart.",
+      "docLink": "",
+      "status": "draft"
+    },
+    {
+      "id": "content-stockholm-reddit-1",
+      "project": "parkpal",
+      "audienceId": "",
+      "outreachId": "outreach-ev-reddit-3",
+      "platform": "reddit",
+      "title": "Utkast till inlägg i r/stockholm",
+      "body": "Jag har länge undvikit att köra bil i Stockholm eftersom jag hatar att parkera i stan.\n\nDet jag tycker är jobbigast är att åka till ett område utan att riktigt veta var man kan stå och vad som gäller när man väl kommer fram.\n\nDärför byggde jag ett eget verktyg för att försöka göra det enklare att förstå parkering innan man åker.\n\nJag är mest nyfiken på om andra här känner igen sig:\n- vad är mest frustrerande med att parkera i Stockholm?\n- är det att hitta plats, förstå reglerna, eller att hålla koll på tider och förändringar?\n- vilken information hade faktiskt hjälpt?\n\nOm det här inte passar i subben får mods gärna ta bort.",
+      "docLink": "",
+      "status": "draft"
+    }
+  ],
+  "feedback": []
+}

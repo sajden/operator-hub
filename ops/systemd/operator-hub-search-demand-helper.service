@@ -1,0 +1,15 @@
+[Unit]
+Description=operator-hub search-demand helper
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO_ROOT__/workers/search-demand-capture
+Environment=OPERATOR_HUB_RESEARCH_HELPER_HOST=127.0.0.1
+Environment=OPERATOR_HUB_RESEARCH_HELPER_PORT=8788
+ExecStart=__NODE_BIN__ src/helper-server.mjs
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
