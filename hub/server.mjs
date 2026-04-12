@@ -19,6 +19,7 @@ import { startBgRemoverJob, getBgRemoverJob, getBgRemoverResult } from './bgRemo
 import { startWatcher, getWatcherStatus } from './bgRemoverWatcher.mjs'
 import { startCloudWatcher, getCloudWatcherStatus } from './bgRemoverCloudWatcher.mjs'
 import { getGallery, resolveFilePath, renameFile, deleteFile, createAlbum } from './mediaFileManager.mjs'
+import { generateArticle, startWeeklyScheduler } from './seoArticleGenerator.mjs'
 import { getPlannerBoardPayload, getPlannerDashboardPayload } from './plannerQueries.mjs'
 import {
   cleanupPlannerCalendarImports,
@@ -1889,6 +1890,84 @@ const server = createServer(async (req, res) => {
       return
     }
 
+    // ── SEO Articles ───────────────────────────────────────────────────────
+    if (effectivePath === '/api/articles' && req.method === 'GET') {
+      try {
+        const draftsDir = path.resolve(repoRoot, '.local/seo-drafts')
+        await mkdir(draftsDir, { recursive: true })
+        const files = await readdir(draftsDir)
+        const drafts = []
+        for (const f of files.filter(f => f.endsWith('.json'))) {
+          try {
+            const data = JSON.parse(await readFile(path.join(draftsDir, f), 'utf-8'))
+            drafts.push(data)
+          } catch {}
+        }
+        drafts.sort((a, b) => (b.generatedAt ?? '').localeCompare(a.generatedAt ?? ''))
+        sendJson(res, 200, drafts)
+      } catch (e) {
+        sendJson(res, 500, { error: String(e) })
+      }
+      return
+    }
+
+    const articleSlugMatch = effectivePath.match(/^\/api\/articles\/([^/]+)$/)
+    if (articleSlugMatch && req.method === 'GET') {
+      const slug = decodeURIComponent(articleSlugMatch[1])
+      const filePath = path.resolve(repoRoot, `.local/seo-drafts/${slug}.json`)
+      try {
+        const data = JSON.parse(await readFile(filePath, 'utf-8'))
+        sendJson(res, 200, data)
+      } catch {
+        sendJson(res, 404, { error: 'Not found' })
+      }
+      return
+    }
+
+    const articleActionMatch = effectivePath.match(/^\/api\/articles\/([^/]+)\/(approve|reject)$/)
+    if (articleActionMatch && req.method === 'POST') {
+      const slug = decodeURIComponent(articleActionMatch[1])
+      const action = articleActionMatch[2]
+      const filePath = path.resolve(repoRoot, `.local/seo-drafts/${slug}.json`)
+      try {
+        const data = JSON.parse(await readFile(filePath, 'utf-8'))
+        data.status = action === 'approve' ? 'approved' : 'rejected'
+        data.reviewedAt = new Date().toISOString()
+        await writeFile(filePath, JSON.stringify(data, null, 2))
+        sendJson(res, 200, { ok: true, status: data.status })
+      } catch {
+        sendJson(res, 404, { error: 'Not found' })
+      }
+      return
+    }
+
+    if (effectivePath === '/api/articles/generate' && req.method === 'POST') {
+      try {
+        const draft = await generateArticle()
+        sendJson(res, 201, { ok: true, slug: draft.slug, title: draft.title })
+      } catch (e) {
+        sendJson(res, 500, { error: String(e) })
+      }
+      return
+    }
+
+    if (effectivePath === '/api/articles' && req.method === 'POST') {
+      try {
+        const body = await readJsonBody(req)
+        const draft = body
+        if (!draft.slug) { sendJson(res, 400, { error: 'slug required' }); return }
+        const draftsDir = path.resolve(repoRoot, '.local/seo-drafts')
+        await mkdir(draftsDir, { recursive: true })
+        draft.generatedAt = draft.generatedAt ?? new Date().toISOString()
+        draft.status = draft.status ?? 'pending'
+        await writeFile(path.join(draftsDir, `${draft.slug}.json`), JSON.stringify(draft, null, 2))
+        sendJson(res, 201, { ok: true })
+      } catch (e) {
+        sendJson(res, 400, { error: String(e) })
+      }
+      return
+    }
+
     // ── Media gallery ──────────────────────────────────────────────────────
     if (effectivePath === '/api/media/gallery' && req.method === 'GET') {
       const url = new URL(effectiveUrl, publicUrl)
@@ -1945,4 +2024,8 @@ server.listen(port, host, () => {
   console.log(`operator-hub mini-hub listening on http://${host}:${port}`)
   startWatcher()
   startCloudWatcher(microsoftAuth, { repoRoot })
+  startWeeklyScheduler((err, draft) => {
+    if (err) console.error('[seo-scheduler] Weekly generation error:', err.message)
+    else console.log(`[seo-scheduler] Weekly article generated: ${draft.slug}`)
+  })
 })

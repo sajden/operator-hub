@@ -11,6 +11,7 @@ import HomeAssistantMapPage from './pages/HomeAssistantMapPage'
 import ResearchPage from './pages/ResearchPage'
 import BgRemoverPage from './pages/BgRemoverPage'
 import ServiceExplainerPage from './pages/ServiceExplainerPage'
+import ArticlesPage from './pages/ArticlesPage'
 import { routePath, stripBasePath } from './data/runtimePaths'
 
 type Route =
@@ -26,6 +27,7 @@ type Route =
   | { kind: 'week' }
   | { kind: 'tv' }
   | { kind: 'bg-remover' }
+  | { kind: 'articles' }
 
 function parseRoute(pathname: string): Route {
   const relativePath = stripBasePath(pathname)
@@ -40,6 +42,7 @@ function parseRoute(pathname: string): Route {
   if (relativePath === '/week') return { kind: 'week' }
   if (relativePath === '/tv') return { kind: 'tv' }
   if (relativePath === '/bg-remover') return { kind: 'bg-remover' }
+  if (relativePath === '/articles') return { kind: 'articles' }
 
   const boardMatch = relativePath.match(/^\/boards\/([^/]+)$/)
   if (boardMatch) {
@@ -145,6 +148,10 @@ function App() {
 
   if (route.kind === 'bg-remover') {
     return <BgRemoverPage onNavigate={navigate} theme={theme} onSetTheme={setTheme} />
+  }
+
+  if (route.kind === 'articles') {
+    return <ArticlesPage onNavigate={navigate} theme={theme} onSetTheme={setTheme} />
   }
 
   return <OperatorDashboardPage onNavigate={navigate} theme={theme} onSetTheme={setTheme} />

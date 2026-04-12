@@ -12,6 +12,7 @@ interface PlannerSidebarProps {
     | 'ha'
     | 'tv'
     | 'bg-remover'
+    | 'articles'
   onNavigate: (path: string) => void
 }
 
@@ -27,7 +28,8 @@ const items = [
   { id: 'service-explainer', label: 'Explainer', path: '/service-explainer' },
   { id: 'ha', label: 'HA', path: '/ha' },
   { id: 'tv', label: 'TV', path: '/tv' },
-  { id: 'bg-remover', label: 'BG Remover', path: '/bg-remover' }
+  { id: 'bg-remover', label: 'BG Remover', path: '/bg-remover' },
+  { id: 'articles', label: 'SEO Artiklar', path: '/articles' },
 ] as const
 
 export default function PlannerSidebar({ current, onNavigate }: PlannerSidebarProps) {
