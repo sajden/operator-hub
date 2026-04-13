@@ -11,6 +11,7 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { captureSearchDemandInsights } from './researchTools.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(__dirname, '..')
@@ -59,39 +60,49 @@ async function getExistingSlugs() {
   return new Set(files.filter((f) => f.endsWith('.json')).map((f) => f.replace(/\.json$/, '')))
 }
 
+const DEMAND_BUCKET_SCORE = { high: 90, medium: 60, low: 30 }
+
 async function fetchTrendTopics(config) {
-  // Use SerpAPI Google Trends if key is available, otherwise fall back to seed keywords
-  const serpKey = process.env.SERPAPI_KEY ?? ''
-  if (!serpKey) {
-    console.log('[seo-generator] No SERPAPI_KEY — using seed keywords directly')
-    return config.seedKeywords.map((kw, i) => ({
-      keyword: kw,
-      score: 100 - i * 10,
-    }))
-  }
+  // Use captureSearchDemandInsights (browser-based, no API key needed)
+  // Falls back to seed keywords if browser session is unavailable
+  try {
+    console.log('[seo-generator] Fetching trends via captureSearchDemandInsights…')
+    const result = await captureSearchDemandInsights({
+      project_slug: 'seo-generator',
+      seed_queries: config.seedKeywords.slice(0, 8),
+      sources: ['google_trends'],  // skip keyword_planner (needs authenticated browser session)
+      market: config.market ?? 'SE',
+      language: config.targetLanguage ?? 'sv',
+      mode: 'background',
+    })
 
-  const topics = []
-  for (const kw of config.seedKeywords.slice(0, 5)) {
-    try {
-      const url = `https://serpapi.com/search.json?engine=google_trends&q=${encodeURIComponent(kw)}&api_key=${serpKey}`
-      const res = await fetch(url, { signal: AbortSignal.timeout(15000) })
-      if (!res.ok) continue
-      const data = await res.json()
-      // interest_over_time.timeline_data last value avg
-      const timeline = data?.interest_over_time?.timeline_data ?? []
-      const last = timeline[timeline.length - 1]
-      const values = last?.values ?? []
-      const score = values.length > 0
-        ? Math.round(values.reduce((s, v) => s + (v.extracted_value ?? 0), 0) / values.length)
-        : 50
-      topics.push({ keyword: kw, score })
-    } catch (e) {
-      console.warn(`[seo-generator] Trends fetch failed for "${kw}": ${e.message}`)
-      topics.push({ keyword: kw, score: 50 })
+    if (result.keywords && result.keywords.length > 0) {
+      const topics = result.keywords.map((kw) => ({
+        keyword: kw.query,
+        score: DEMAND_BUCKET_SCORE[kw.demand_bucket] ?? 50,
+      }))
+      // Deduplicate by keyword, sort by score desc
+      const seen = new Set()
+      const unique = topics.filter((t) => {
+        const k = t.keyword.toLowerCase()
+        if (seen.has(k)) return false
+        seen.add(k)
+        return true
+      })
+      console.log(`[seo-generator] Got ${unique.length} trend topics from research tool`)
+      return unique.sort((a, b) => b.score - a.score)
     }
+
+    console.log('[seo-generator] Research returned no keywords — using seed keywords')
+  } catch (e) {
+    console.warn(`[seo-generator] captureSearchDemandInsights failed: ${e.message} — falling back to seed keywords`)
   }
 
-  return topics.sort((a, b) => b.score - a.score)
+  // Fallback: use seed keywords with descending synthetic scores
+  return config.seedKeywords.map((kw, i) => ({
+    keyword: kw,
+    score: 100 - i * 10,
+  }))
 }
 
 async function callCodex(prompt) {
