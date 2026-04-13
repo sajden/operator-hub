@@ -228,6 +228,8 @@ export async function generateArticle(options = {}) {
     tags: Array.isArray(parsed.tags) ? parsed.tags : [],
     trendTopic: parsed.trendTopic ?? topic.keyword,
     trendScore: parsed.trendScore ?? topic.score,
+    site: config.site ?? 'sebcastwall',
+    siteName: config.siteName ?? '',
     generatedAt: nowIso(),
     status: 'pending',
   }

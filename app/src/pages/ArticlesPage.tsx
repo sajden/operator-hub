@@ -15,6 +15,8 @@ interface Draft {
   updatedAt?: string
   status: 'pending' | 'approved' | 'rejected' | 'published'
   publishedAt?: string
+  site?: string
+  siteName?: string
 }
 
 interface EditState {
@@ -86,6 +88,7 @@ const inputStyle: React.CSSProperties = {
 export default function ArticlesPage({ onNavigate, theme, onSetTheme }: ArticlesPageProps) {
   const [drafts, setDrafts] = useState<Draft[]>([])
   const [selected, setSelected] = useState<Draft | null>(null)
+  const [siteFilter, setSiteFilter] = useState<string>('all')
   const [loading, setLoading] = useState(true)
   const [actionMsg, setActionMsg] = useState('')
   const [generating, setGenerating] = useState(false)
@@ -231,8 +234,10 @@ export default function ArticlesPage({ onNavigate, theme, onSetTheme }: Articles
     }
   }
 
-  const pending = drafts.filter(d => d.status === 'pending')
-  const reviewed = drafts.filter(d => d.status !== 'pending')
+  const sites = Array.from(new Set(drafts.map(d => d.site ?? 'okänd'))).sort()
+  const filtered = siteFilter === 'all' ? drafts : drafts.filter(d => (d.site ?? 'okänd') === siteFilter)
+  const pending = filtered.filter(d => d.status === 'pending')
+  const reviewed = filtered.filter(d => d.status !== 'pending')
 
   return (
     <div className="planner-app-shell" data-theme={theme}>
@@ -240,6 +245,18 @@ export default function ArticlesPage({ onNavigate, theme, onSetTheme }: Articles
       <main className="planner-workspace">
         <div style={{ display: 'flex', alignItems: 'center', padding: '0 20px', height: 56, borderBottom: '1px solid var(--border)', gap: 16, flexShrink: 0 }}>
           <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>SEO Artiklar</h2>
+          {sites.length > 1 && (
+            <select
+              value={siteFilter}
+              onChange={e => { setSiteFilter(e.target.value); setSelected(null); cancelEdit() }}
+              style={{ fontSize: 13, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface-raised)', color: 'var(--text)', cursor: 'pointer' }}
+            >
+              <option value="all">Alla siter ({drafts.length})</option>
+              {sites.map(s => (
+                <option key={s} value={s}>{s} ({drafts.filter(d => (d.site ?? 'okänd') === s).length})</option>
+              ))}
+            </select>
+          )}
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
             {actionMsg && <span style={{ fontSize: 13, fontWeight: 600 }}>{actionMsg}</span>}
             <button
@@ -314,6 +331,7 @@ export default function ArticlesPage({ onNavigate, theme, onSetTheme }: Articles
                 <div style={{ display: 'flex', gap: 16, marginBottom: 20, fontSize: 13, color: 'var(--text-muted)', flexWrap: 'wrap' }}>
                   <span>Genererad {fmt(selected.generatedAt)}</span>
                   {selected.publishedAt && <span>Publicerad {fmt(selected.publishedAt)}</span>}
+                  {selected.siteName && <span style={{ background: 'var(--surface-raised)', border: '1px solid var(--border)', borderRadius: 4, padding: '1px 7px', fontSize: 11, fontWeight: 600 }}>{selected.siteName}</span>}
                   {selected.trendTopic && <span>Trend: <strong>{selected.trendTopic}</strong></span>}
                   {selected.trendScore != null && <span>Score: <strong>{selected.trendScore}</strong></span>}
                   {selected.category && <span>Kategori: <strong>{selected.category}</strong></span>}
@@ -431,8 +449,8 @@ function DraftRow({ draft, selected, onClick }: { draft: Draft; selected: boolea
       style={{ padding: '10px 12px', borderRadius: 8, cursor: 'pointer', marginBottom: 4, background: selected ? 'var(--accent-subtle)' : 'transparent', border: selected ? '1px solid var(--accent)' : '1px solid transparent' }}
     >
       <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4, lineHeight: 1.3 }}>{draft.title}</div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{fmt(draft.generatedAt)}</span>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 4 }}>
+        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{fmt(draft.generatedAt)}{draft.siteName ? ` · ${draft.siteName}` : ''}</span>
         {statusBadge(draft.status)}
       </div>
     </div>
