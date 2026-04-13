@@ -13,6 +13,7 @@ interface PlannerSidebarProps {
     | 'tv'
     | 'bg-remover'
     | 'articles'
+  | 'jobs'
   onNavigate: (path: string) => void
 }
 
@@ -30,6 +31,7 @@ const items = [
   { id: 'tv', label: 'TV', path: '/tv' },
   { id: 'bg-remover', label: 'BG Remover', path: '/bg-remover' },
   { id: 'articles', label: 'SEO Artiklar', path: '/articles' },
+  { id: 'jobs', label: 'Batch Jobs', path: '/jobs' },
 ] as const
 
 export default function PlannerSidebar({ current, onNavigate }: PlannerSidebarProps) {

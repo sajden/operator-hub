@@ -19,7 +19,7 @@ import { startBgRemoverJob, getBgRemoverJob, getBgRemoverResult } from './bgRemo
 import { startWatcher, getWatcherStatus } from './bgRemoverWatcher.mjs'
 import { startCloudWatcher, getCloudWatcherStatus } from './bgRemoverCloudWatcher.mjs'
 import { getGallery, resolveFilePath, renameFile, deleteFile, createAlbum } from './mediaFileManager.mjs'
-import { generateArticle, startWeeklyScheduler } from './seoArticleGenerator.mjs'
+import { generateArticle, startWeeklyScheduler, getSeoSchedulerStatus } from './seoArticleGenerator.mjs'
 import { getPlannerBoardPayload, getPlannerDashboardPayload } from './plannerQueries.mjs'
 import {
   cleanupPlannerCalendarImports,
@@ -1887,6 +1887,54 @@ const server = createServer(async (req, res) => {
 
     if (effectivePath === '/api/bg-remover/cloud-watcher' && req.method === 'GET') {
       sendJson(res, 200, getCloudWatcherStatus())
+      return
+    }
+
+    // ── Batch jobs overview ────────────────────────────────────────────────
+    if (effectivePath === '/api/jobs' && req.method === 'GET') {
+      const local = getWatcherStatus()
+      const cloud = getCloudWatcherStatus()
+      const seo = getSeoSchedulerStatus()
+
+      sendJson(res, 200, {
+        jobs: [
+          {
+            id: 'bg-remover-local',
+            name: 'BG Remover (lokal)',
+            description: 'Övervakar lokal input-mapp och tar bort bakgrund automatiskt',
+            type: 'watcher',
+            schedule: 'Var 5:e sekund (kontinuerlig)',
+            inputDir: local.inputDir,
+            outputDir: local.outputDir,
+            queueLength: local.jobs.filter(j => j.status === 'processing' || j.status === 'queued').length,
+            recentJobs: local.jobs.slice(0, 10),
+          },
+          {
+            id: 'bg-remover-cloud',
+            name: 'BG Remover (OneDrive)',
+            description: 'Hämtar videor från OneDrive, tar bort bakgrund och laddar upp resultatet',
+            type: 'watcher',
+            schedule: 'Var 30:e sekund (kontinuerlig)',
+            inputPath: cloud.inputPath,
+            outputPath: cloud.outputPath,
+            queueLength: cloud.jobs.filter(j => j.status === 'processing' || j.status === 'queued').length,
+            recentJobs: cloud.jobs.slice(0, 10),
+          },
+          {
+            id: 'seo-generator',
+            name: 'SEO Artikelgenerator',
+            description: 'Genererar SEO-artiklar baserat på Google Trends en gång i veckan',
+            type: 'scheduler',
+            schedule: 'Varje måndag 08:00',
+            nextRunAt: seo.nextRunAt,
+            lastRunAt: seo.lastRunAt,
+            lastRunStatus: seo.lastRunStatus,
+            lastRunSlug: seo.lastRunSlug,
+            lastRunError: seo.lastRunError,
+            running: seo.running,
+          },
+        ],
+      })
       return
     }
 

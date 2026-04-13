@@ -250,12 +250,25 @@ async function saveDraft(draft) {
   await writeFile(filePath, JSON.stringify(draft, null, 2), 'utf-8')
 }
 
+// ── Scheduler state ──────────────────────────────────────────────────────────
+const schedulerState = {
+  nextRunAt: null,
+  lastRunAt: null,
+  lastRunStatus: null,  // 'ok' | 'error'
+  lastRunSlug: null,
+  lastRunError: null,
+  running: false,
+}
+
+export function getSeoSchedulerStatus() {
+  return { ...schedulerState }
+}
+
 // Weekly scheduler: runs every Monday at 08:00 (local time)
 export function startWeeklyScheduler(onGenerate) {
   function msUntilNextMonday0800() {
     const now = new Date()
     const next = new Date(now)
-    // Advance to next Monday
     const dayOfWeek = now.getDay() // 0=Sun, 1=Mon, ...
     const daysUntilMonday = dayOfWeek === 1 ? 7 : (8 - dayOfWeek) % 7 || 7
     next.setDate(now.getDate() + daysUntilMonday)
@@ -265,17 +278,26 @@ export function startWeeklyScheduler(onGenerate) {
 
   function scheduleNext() {
     const delay = msUntilNextMonday0800()
-    const nextRunAt = new Date(Date.now() + delay).toISOString()
-    console.log(`[seo-scheduler] Next generation scheduled at ${nextRunAt}`)
+    schedulerState.nextRunAt = new Date(Date.now() + delay).toISOString()
+    console.log(`[seo-scheduler] Next generation scheduled at ${schedulerState.nextRunAt}`)
 
     setTimeout(async () => {
+      schedulerState.running = true
+      schedulerState.lastRunAt = nowIso()
       try {
         console.log('[seo-scheduler] Running weekly article generation…')
         const draft = await generateArticle()
+        schedulerState.lastRunStatus = 'ok'
+        schedulerState.lastRunSlug = draft.slug
+        schedulerState.lastRunError = null
         onGenerate?.(null, draft)
       } catch (err) {
         console.error('[seo-scheduler] Generation failed:', err.message)
+        schedulerState.lastRunStatus = 'error'
+        schedulerState.lastRunError = err.message
         onGenerate?.(err, null)
+      } finally {
+        schedulerState.running = false
       }
       scheduleNext()
     }, delay)
