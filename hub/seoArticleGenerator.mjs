@@ -170,33 +170,33 @@ function buildPrompt(config, topic, existingSlugs) {
   const avoidList = [...config.avoidTopics, ...Array.from(existingSlugs)].slice(0, 20).join(', ')
   const lang = config.targetLanguage === 'sv' ? 'svenska' : 'English'
 
-  return `Du är en SEO-expert och skribent. Skriv en SEO-optimerad artikel på ${lang}.
+  return `Du är en skribent som skriver SEO-artiklar för ${config.siteDescription}.
 
-ÄMNE: ${topic.keyword}
+ÄMNE ATT SKRIVA OM: ${topic.keyword}
 NISCH: ${config.niche}
 MÅLGRUPP: ${config.targetAudience}
-WEBBPLATSBESKRIVNING: ${config.siteDescription}
-MÅLORDLÄNGD: ungefär ${config.articleLengthWords} ord
-UNDVIK DESSA ÄMNEN/SLUGAR: ${avoidList || 'inga'}
+LÄNGD: strikt ${config.articleLengthWords} ord — inte mer
+UNDVIK DESSA ÄMNEN/SLUGAR (redan skrivna): ${avoidList || 'inga'}
 
-Returnera ENDAST ett JSON-objekt med exakt dessa fält (ingen text utanför JSON):
+SKRIVSTIL:
+- Direkt och personlig ton — inte akademisk eller listtung
+- Använd sökordet naturligt, max 3-4 gånger i hela texten
+- Inga tomma fraser som "i dagens digitala landskap" eller "det är viktigt att"
+- Max 2 H2-rubriker — håll det kompakt
+- Nämn INTE författarens namn i brödtexten
+- Ingen onödig intro om hur viktig frågan är — hoppa rakt in i ämnet
+
+Returnera ENDAST ett JSON-objekt, ingen text utanför:
 
 {
-  "slug": "url-vanlig-slug-max-60-tecken",
-  "title": "Artikelrubrik (H1)",
-  "metaDescription": "Max 160 tecken SEO-beskrivning",
-  "body": "# Rubrik\\n\\nMarkdown-artikel...",
+  "slug": "url-slug-max-60-tecken",
+  "title": "Artikelrubrik",
+  "metaDescription": "Max 160 tecken",
+  "body": "## Rubrik\\n\\nMarkdown utan inledande H1...",
   "tags": ["tag1", "tag2", "tag3"],
   "trendTopic": "${topic.keyword}",
   "trendScore": ${topic.score}
-}
-
-Artikeln ska:
-- Ha en tydlig H1, minst 2 H2-rubriker
-- Innehålla naturligt sökordsanvändning
-- Ha en kort intro och en slutsats
-- Vara informativ och engagerande
-- Vara på ${lang}`
+}`
 }
 
 export async function generateArticle(options = {}) {
