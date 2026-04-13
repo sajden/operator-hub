@@ -61,48 +61,64 @@ async function getExistingSlugs() {
 }
 
 const DEMAND_BUCKET_SCORE = { high: 90, medium: 60, low: 30 }
+const TRENDS_CACHE_TTL_MS = 24 * 60 * 60 * 1000 // 24h
+const trendsCachePath = path.resolve(repoRoot, '.local/seo-trends-cache.json')
+
+async function loadTrendsCache() {
+  try {
+    const raw = JSON.parse(await readFile(trendsCachePath, 'utf-8'))
+    if (Date.now() - new Date(raw.fetchedAt).getTime() < TRENDS_CACHE_TTL_MS) {
+      console.log(`[seo-generator] Using cached trends from ${raw.fetchedAt} (${raw.topics.length} topics)`)
+      return raw.topics
+    }
+    console.log('[seo-generator] Trends cache expired — fetching fresh')
+  } catch {
+    // no cache yet
+  }
+  return null
+}
+
+async function saveTrendsCache(topics) {
+  await mkdir(path.dirname(trendsCachePath), { recursive: true })
+  await writeFile(trendsCachePath, JSON.stringify({ fetchedAt: nowIso(), topics }, null, 2), 'utf-8')
+}
 
 async function fetchTrendTopics(config) {
-  // Use captureSearchDemandInsights (browser-based, no API key needed)
-  // Falls back to seed keywords if browser session is unavailable
+  // Return cached results if still fresh (max 24h old)
+  const cached = await loadTrendsCache()
+  if (cached) return cached
+
+  // Fetch fresh trends via browser-based captureSearchDemandInsights (no API key needed)
   try {
     console.log('[seo-generator] Fetching trends via captureSearchDemandInsights…')
     const result = await captureSearchDemandInsights({
       project_slug: 'seo-generator',
       seed_queries: config.seedKeywords.slice(0, 8),
-      sources: ['google_trends'],  // skip keyword_planner (needs authenticated browser session)
+      sources: ['google_trends'],
       market: config.market ?? 'SE',
       language: config.targetLanguage ?? 'sv',
       mode: 'background',
     })
 
     if (result.keywords && result.keywords.length > 0) {
-      const topics = result.keywords.map((kw) => ({
-        keyword: kw.query,
-        score: DEMAND_BUCKET_SCORE[kw.demand_bucket] ?? 50,
-      }))
-      // Deduplicate by keyword, sort by score desc
       const seen = new Set()
-      const unique = topics.filter((t) => {
-        const k = t.keyword.toLowerCase()
-        if (seen.has(k)) return false
-        seen.add(k)
-        return true
-      })
-      console.log(`[seo-generator] Got ${unique.length} trend topics from research tool`)
-      return unique.sort((a, b) => b.score - a.score)
+      const topics = result.keywords
+        .map((kw) => ({ keyword: kw.query, score: DEMAND_BUCKET_SCORE[kw.demand_bucket] ?? 50 }))
+        .filter((t) => { const k = t.keyword.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true })
+        .sort((a, b) => b.score - a.score)
+
+      console.log(`[seo-generator] Got ${topics.length} fresh trend topics — caching for 24h`)
+      await saveTrendsCache(topics)
+      return topics
     }
 
-    console.log('[seo-generator] Research returned no keywords — using seed keywords')
+    console.log('[seo-generator] Research returned no keywords — falling back to seed keywords')
   } catch (e) {
     console.warn(`[seo-generator] captureSearchDemandInsights failed: ${e.message} — falling back to seed keywords`)
   }
 
-  // Fallback: use seed keywords with descending synthetic scores
-  return config.seedKeywords.map((kw, i) => ({
-    keyword: kw,
-    score: 100 - i * 10,
-  }))
+  // Fallback: seed keywords as topics (not cached — will retry next run)
+  return config.seedKeywords.map((kw, i) => ({ keyword: kw, score: 100 - i * 10 }))
 }
 
 async function callCodex(prompt) {

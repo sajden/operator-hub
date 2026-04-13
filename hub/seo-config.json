@@ -1,19 +1,15 @@
 {
   "site": "sebcastwall",
   "siteName": "sebcastwall.se",
-  "niche": "bakgrund borttagning, videoredigering, AI-verktyg för innehållsskapare",
+  "niche": "AI-automation, interna verktyg, systemintegrationer och mjukvaruutveckling för svenska företag",
   "market": "SE",
-  "siteDescription": "Verktyg för att ta bort bakgrunder från videor och bilder med AI",
+  "siteDescription": "Sebastian Catwall — utvecklare och konsult inom AI, automation och interna verktyg för SMB",
   "targetLanguage": "sv",
-  "targetAudience": "svenska innehållsskapare, YouTubers, videoredaktörer",
+  "targetAudience": "svenska SMB-ägare, produktchefer och IT-ansvariga som vill effektivisera med AI och automation",
   "seedKeywords": [
-    "ta bort bakgrund video",
-    "bakgrundsborttagning AI",
-    "green screen alternativ",
-    "videoredigering AI",
-    "remove background video",
-    "AI video tools",
-    "content creator verktyg"
+    "AI automation företag",
+    "interna verktyg digitalisering",
+    "systemintegration Sverige"
   ],
   "articleLengthWords": 900,
   "generateCount": 1,
