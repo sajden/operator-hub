@@ -11,7 +11,8 @@ interface Draft {
   trendTopic?: string
   generatedAt: string
   reviewedAt?: string
-  status: 'pending' | 'approved' | 'rejected'
+  status: 'pending' | 'approved' | 'rejected' | 'published'
+  publishedAt?: string
 }
 
 interface ArticlesPageProps {
@@ -29,11 +30,13 @@ function statusBadge(status: Draft['status']) {
     pending: '#b07d00',
     approved: '#1a7a3c',
     rejected: '#a03030',
+    published: '#1a4fa8',
   }
   const labels: Record<Draft['status'], string> = {
     pending: 'Väntar',
     approved: 'Godkänd',
     rejected: 'Avvisad',
+    published: 'Publicerad',
   }
   return (
     <span style={{
@@ -55,6 +58,7 @@ export default function ArticlesPage({ onNavigate, theme, onSetTheme }: Articles
   const [loading, setLoading] = useState(true)
   const [actionMsg, setActionMsg] = useState('')
   const [generating, setGenerating] = useState(false)
+  const [publishing, setPublishing] = useState(false)
 
   async function loadDrafts() {
     setLoading(true)
@@ -85,6 +89,27 @@ export default function ArticlesPage({ onNavigate, theme, onSetTheme }: Articles
       setActionMsg(`✗ Nätverksfel`)
     } finally {
       setGenerating(false)
+      setTimeout(() => setActionMsg(''), 6000)
+    }
+  }
+
+  async function doPublish(slug: string) {
+    setPublishing(true)
+    setActionMsg('')
+    try {
+      const res = await fetch(`/api/articles/${encodeURIComponent(slug)}/publish`, { method: 'POST' })
+      const data = await res.json()
+      if (res.ok) {
+        setActionMsg('✓ Publicerad på sebcastwall')
+        await loadDrafts()
+        setSelected(prev => prev ? { ...prev, status: 'published', publishedAt: data.publishedAt } : prev)
+      } else {
+        setActionMsg(`✗ ${data.error ?? 'Okänt fel'}`)
+      }
+    } catch {
+      setActionMsg('✗ Nätverksfel')
+    } finally {
+      setPublishing(false)
       setTimeout(() => setActionMsg(''), 6000)
     }
   }
@@ -204,7 +229,7 @@ export default function ArticlesPage({ onNavigate, theme, onSetTheme }: Articles
                       onClick={() => doAction(selected.slug, 'approve')}
                       style={{ background: '#1a7a3c', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 24px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
                     >
-                      ✓ Godkänn &amp; publicera
+                      ✓ Godkänn
                     </button>
                     <button
                       onClick={() => doAction(selected.slug, 'reject')}
@@ -213,6 +238,25 @@ export default function ArticlesPage({ onNavigate, theme, onSetTheme }: Articles
                       ✗ Avvisa
                     </button>
                     {actionMsg && <span style={{ alignSelf: 'center', fontSize: 14, fontWeight: 600 }}>{actionMsg}</span>}
+                  </div>
+                )}
+
+                {selected.status === 'approved' && (
+                  <div style={{ display: 'flex', gap: 12, marginBottom: 24, alignItems: 'center' }}>
+                    <button
+                      onClick={() => doPublish(selected.slug)}
+                      disabled={publishing}
+                      style={{ background: publishing ? '#888' : '#1a4fa8', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 24px', fontSize: 14, fontWeight: 600, cursor: publishing ? 'not-allowed' : 'pointer' }}
+                    >
+                      {publishing ? 'Publicerar…' : '↑ Publicera på sebcastwall'}
+                    </button>
+                    {actionMsg && <span style={{ alignSelf: 'center', fontSize: 14, fontWeight: 600 }}>{actionMsg}</span>}
+                  </div>
+                )}
+
+                {selected.status === 'published' && selected.publishedAt && (
+                  <div style={{ marginBottom: 24, fontSize: 13, color: 'var(--text-muted)' }}>
+                    Publicerad {new Date(selected.publishedAt).toLocaleDateString('sv-SE', { year: 'numeric', month: 'short', day: 'numeric' })}
                   </div>
                 )}
 

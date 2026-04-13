@@ -20,6 +20,7 @@ import { startWatcher, getWatcherStatus } from './bgRemoverWatcher.mjs'
 import { startCloudWatcher, getCloudWatcherStatus } from './bgRemoverCloudWatcher.mjs'
 import { getGallery, resolveFilePath, renameFile, deleteFile, createAlbum } from './mediaFileManager.mjs'
 import { generateArticle, startWeeklyScheduler, getSeoSchedulerStatus } from './seoArticleGenerator.mjs'
+import { publishDraft } from './seoPublisher.mjs'
 import { getPlannerBoardPayload, getPlannerDashboardPayload } from './plannerQueries.mjs'
 import {
   cleanupPlannerCalendarImports,
@@ -1985,6 +1986,18 @@ const server = createServer(async (req, res) => {
         sendJson(res, 200, { ok: true, status: data.status })
       } catch {
         sendJson(res, 404, { error: 'Not found' })
+      }
+      return
+    }
+
+    const articlePublishMatch = effectivePath.match(/^\/api\/articles\/([^/]+)\/publish$/)
+    if (articlePublishMatch && req.method === 'POST') {
+      const slug = decodeURIComponent(articlePublishMatch[1])
+      try {
+        const result = await publishDraft(slug)
+        sendJson(res, 200, { ok: true, ...result })
+      } catch (e) {
+        sendJson(res, 500, { error: String(e) })
       }
       return
     }

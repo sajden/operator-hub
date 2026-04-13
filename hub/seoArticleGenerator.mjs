@@ -116,7 +116,7 @@ async function callCodex(prompt) {
     const res = await fetch(CODEX_URL, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ message: prompt }),
+      body: JSON.stringify({ text: prompt }),
       signal: controller.signal,
     })
 
@@ -126,8 +126,8 @@ async function callCodex(prompt) {
     }
 
     const data = await res.json()
-    // codex-gateway returns { reply: "..." }
-    return data.reply ?? data.text ?? data.content ?? String(data)
+    // codex-gateway returns { text: "..." }
+    return data.text ?? data.reply ?? data.content ?? String(data)
   } finally {
     clearTimeout(timer)
   }
