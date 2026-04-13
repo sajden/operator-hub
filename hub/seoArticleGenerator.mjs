@@ -54,10 +54,21 @@ async function loadConfig() {
   }
 }
 
-async function getExistingSlugs() {
+async function getExistingDraftMeta() {
   await mkdir(draftsDir, { recursive: true })
   const files = await readdir(draftsDir)
-  return new Set(files.filter((f) => f.endsWith('.json')).map((f) => f.replace(/\.json$/, '')))
+  const slugs = new Set()
+  const usedTopics = new Set()
+
+  for (const f of files.filter((f) => f.endsWith('.json'))) {
+    slugs.add(f.replace(/\.json$/, ''))
+    try {
+      const d = JSON.parse(await readFile(path.join(draftsDir, f), 'utf-8'))
+      if (d.trendTopic) usedTopics.add(d.trendTopic.toLowerCase())
+    } catch {}
+  }
+
+  return { slugs, usedTopics }
 }
 
 const DEMAND_BUCKET_SCORE = { high: 90, medium: 60, low: 30 }
@@ -117,8 +128,32 @@ async function fetchTrendTopics(config) {
     console.warn(`[seo-generator] captureSearchDemandInsights failed: ${e.message} — falling back to seed keywords`)
   }
 
-  // Fallback: seed keywords as topics (not cached — will retry next run)
-  return config.seedKeywords.map((kw, i) => ({ keyword: kw, score: 100 - i * 10 }))
+  // Fallback: seed keywords + shuffle so we don't always pick the same one
+  const seeds = config.seedKeywords.map((kw, i) => ({ keyword: kw, score: 100 - i * 10 }))
+  // Not cached — Trends will be retried next run
+  return seeds
+}
+
+async function suggestNewTopic(config, usedTopics) {
+  const used = Array.from(usedTopics).slice(0, 20).join(', ')
+  const prompt = `Du är en SEO-strateg för webbplatsen: ${config.siteDescription}.
+Nisch: ${config.niche}
+Målgrupp: ${config.targetAudience}
+
+Redan skrivna ämnen (undvik dessa): ${used || 'inga'}
+
+Föreslå ETT nytt artikelämne som passar nischen och som inte liknar de redan skrivna.
+Svara med BARA ämnestiteln, ingenting annat.`
+
+  try {
+    const raw = await callCodex(prompt)
+    const topic = raw.trim().replace(/^["']|["']$/g, '').split('\n')[0].trim()
+    console.log(`[seo-generator] Codex suggested new topic: "${topic}"`)
+    return topic
+  } catch (e) {
+    console.warn(`[seo-generator] Topic suggestion failed: ${e.message}`)
+    return `${config.niche.split(',')[0].trim()} tips`
+  }
 }
 
 async function callCodex(prompt) {
@@ -201,15 +236,24 @@ Returnera ENDAST ett JSON-objekt, ingen text utanför:
 
 export async function generateArticle(options = {}) {
   const config = await loadConfig()
-  const existingSlugs = await getExistingSlugs()
+  const { slugs: existingSlugs, usedTopics } = await getExistingDraftMeta()
 
   const topics = await fetchTrendTopics(config)
   if (topics.length === 0) {
     throw new Error('No trend topics available')
   }
 
-  // Pick first topic not already drafted
-  const topic = topics.find((t) => !existingSlugs.has(slugify(t.keyword))) ?? topics[0]
+  // Pick first topic not already used (by trendTopic or slug)
+  let topic =
+    topics.find((t) => !usedTopics.has(t.keyword.toLowerCase()) && !existingSlugs.has(slugify(t.keyword))) ??
+    topics.find((t) => !usedTopics.has(t.keyword.toLowerCase()))
+
+  // All known topics already used — ask Codex for a fresh one
+  if (!topic) {
+    console.log('[seo-generator] All known topics used — asking Codex for a new topic…')
+    const newKeyword = await suggestNewTopic(config, usedTopics)
+    topic = { keyword: newKeyword, score: 50 }
+  }
 
   console.log(`[seo-generator] Generating article for topic: "${topic.keyword}" (score: ${topic.score})`)
 
