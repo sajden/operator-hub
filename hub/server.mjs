@@ -20,7 +20,7 @@ import { startWatcher, getWatcherStatus } from './bgRemoverWatcher.mjs'
 import { startCloudWatcher, getCloudWatcherStatus } from './bgRemoverCloudWatcher.mjs'
 import { getGallery, resolveFilePath, renameFile, deleteFile, createAlbum } from './mediaFileManager.mjs'
 import { generateArticle, startWeeklyScheduler, getSeoSchedulerStatus } from './seoArticleGenerator.mjs'
-import { publishDraft } from './seoPublisher.mjs'
+import { publishDraft, updateDraft, unpublishDraft } from './seoPublisher.mjs'
 import { getPlannerBoardPayload, getPlannerDashboardPayload } from './plannerQueries.mjs'
 import {
   cleanupPlannerCalendarImports,
@@ -1986,6 +1986,31 @@ const server = createServer(async (req, res) => {
         sendJson(res, 200, { ok: true, status: data.status })
       } catch {
         sendJson(res, 404, { error: 'Not found' })
+      }
+      return
+    }
+
+    // PATCH /api/articles/:slug — update fields (+ re-publish MDX if published)
+    if (articleSlugMatch && req.method === 'PATCH') {
+      const slug = decodeURIComponent(articleSlugMatch[1])
+      try {
+        const body = await readJsonBody(req)
+        const draft = await updateDraft(slug, body)
+        sendJson(res, 200, { ok: true, draft })
+      } catch (e) {
+        sendJson(res, 500, { error: String(e) })
+      }
+      return
+    }
+
+    // DELETE /api/articles/:slug — unpublish (remove MDX, revert to approved)
+    if (articleSlugMatch && req.method === 'DELETE') {
+      const slug = decodeURIComponent(articleSlugMatch[1])
+      try {
+        const result = await unpublishDraft(slug)
+        sendJson(res, 200, { ok: true, ...result })
+      } catch (e) {
+        sendJson(res, 500, { error: String(e) })
       }
       return
     }
