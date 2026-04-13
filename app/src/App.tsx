@@ -13,6 +13,7 @@ import BgRemoverPage from './pages/BgRemoverPage'
 import ServiceExplainerPage from './pages/ServiceExplainerPage'
 import ArticlesPage from './pages/ArticlesPage'
 import BatchJobsPage from './pages/BatchJobsPage'
+import AdvisorAbusePage from './pages/AdvisorAbusePage'
 import { routePath, stripBasePath } from './data/runtimePaths'
 
 type Route =
@@ -29,6 +30,7 @@ type Route =
   | { kind: 'tv' }
   | { kind: 'bg-remover' }
   | { kind: 'articles' }
+  | { kind: 'advisor-abuse' }
   | { kind: 'jobs' }
 
 function parseRoute(pathname: string): Route {
@@ -45,6 +47,7 @@ function parseRoute(pathname: string): Route {
   if (relativePath === '/tv') return { kind: 'tv' }
   if (relativePath === '/bg-remover') return { kind: 'bg-remover' }
   if (relativePath === '/articles') return { kind: 'articles' }
+  if (relativePath === '/advisor-abuse') return { kind: 'advisor-abuse' }
   if (relativePath === '/jobs') return { kind: 'jobs' }
 
   const boardMatch = relativePath.match(/^\/boards\/([^/]+)$/)
@@ -155,6 +158,10 @@ function App() {
 
   if (route.kind === 'articles') {
     return <ArticlesPage onNavigate={navigate} theme={theme} onSetTheme={setTheme} />
+  }
+
+  if (route.kind === 'advisor-abuse') {
+    return <AdvisorAbusePage onNavigate={navigate} theme={theme} onSetTheme={setTheme} />
   }
 
   if (route.kind === 'jobs') {

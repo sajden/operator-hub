@@ -83,6 +83,8 @@ const port = Number(process.env.OPERATOR_HUB_PORT ?? 8787)
 const publicUrl = process.env.OPERATOR_HUB_PUBLIC_URL ?? `http://localhost:${port}`
 const appUrl = process.env.OPERATOR_HUB_APP_URL ?? 'http://localhost:5173'
 const appBasePath = (process.env.OPERATOR_HUB_APP_BASE_PATH ?? '/operatorhub-app').replace(/\/+$/, '') || '/operatorhub-app'
+const advisorAbuseUrl = process.env.SEBCASTWALL_ADVISOR_ABUSE_URL ?? 'http://127.0.0.1:3300/api/advisor/abuse'
+const advisorAdminSecret = process.env.SEBCASTWALL_ADVISOR_ADMIN_SECRET ?? ''
 const frontendDistDir = path.resolve(repoRoot, 'app/dist')
 const microsoftScopes = (
   process.env.OPERATOR_HUB_MS_SCOPES ?? 'openid profile offline_access User.Read Files.Read Calendars.ReadWrite'
@@ -1939,16 +1941,38 @@ const server = createServer(async (req, res) => {
       return
     }
 
+    if (effectivePath === '/api/advisor-abuse' && req.method === 'GET') {
+      if (!advisorAdminSecret) {
+        sendJson(res, 500, { error: 'Missing SEBCASTWALL_ADVISOR_ADMIN_SECRET' })
+        return
+      }
+
+      const response = await fetch(advisorAbuseUrl, {
+        headers: {
+          'x-advisor-admin-secret': advisorAdminSecret,
+        },
+      })
+
+      const payload = await response.json().catch(() => ({ error: 'Invalid response from advisor abuse endpoint' }))
+      sendJson(res, response.status, payload)
+      return
+    }
+
     // ── SEO Articles ───────────────────────────────────────────────────────
     if (effectivePath === '/api/articles' && req.method === 'GET') {
       try {
         const draftsDir = path.resolve(repoRoot, '.local/seo-drafts')
+        const sebcastwallArticles = process.env.SEO_PUBLISH_REPO
+          ? path.join(process.env.SEO_PUBLISH_REPO, 'content/articles')
+          : '/home/sajden/github/sebcastwall/content/articles'
         await mkdir(draftsDir, { recursive: true })
         const files = await readdir(draftsDir)
         const drafts = []
         for (const f of files.filter(f => f.endsWith('.json'))) {
           try {
             const data = JSON.parse(await readFile(path.join(draftsDir, f), 'utf-8'))
+            // Cross-check: does the MDX file actually exist on disk?
+            data.mdxOnDisk = existsSync(path.join(sebcastwallArticles, `${data.slug}.mdx`))
             drafts.push(data)
           } catch {}
         }
@@ -2028,12 +2052,13 @@ const server = createServer(async (req, res) => {
     }
 
     if (effectivePath === '/api/articles/generate' && req.method === 'POST') {
-      try {
-        const draft = await generateArticle()
-        sendJson(res, 201, { ok: true, slug: draft.slug, title: draft.title })
-      } catch (e) {
-        sendJson(res, 500, { error: String(e) })
-      }
+      // Return immediately — generation runs in background (Codex can take 60-120s)
+      sendJson(res, 202, { ok: true, message: 'Generering startad…' })
+      generateArticle().then((draft) => {
+        console.log(`[seo-generator] Background generation complete: ${draft.slug}`)
+      }).catch((e) => {
+        console.error(`[seo-generator] Background generation failed: ${e.message}`)
+      })
       return
     }
 
