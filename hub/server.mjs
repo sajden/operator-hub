@@ -84,6 +84,7 @@ const publicUrl = process.env.OPERATOR_HUB_PUBLIC_URL ?? `http://localhost:${por
 const appUrl = process.env.OPERATOR_HUB_APP_URL ?? 'http://localhost:5173'
 const appBasePath = (process.env.OPERATOR_HUB_APP_BASE_PATH ?? '/operatorhub-app').replace(/\/+$/, '') || '/operatorhub-app'
 const advisorAbuseUrl = process.env.SEBCASTWALL_ADVISOR_ABUSE_URL ?? 'http://127.0.0.1:3300/api/advisor/abuse'
+const advisorChatsUrl = process.env.SEBCASTWALL_ADVISOR_CHATS_URL ?? 'http://127.0.0.1:3300/api/advisor/chats'
 const advisorAdminSecret = process.env.SEBCASTWALL_ADVISOR_ADMIN_SECRET ?? ''
 const frontendDistDir = path.resolve(repoRoot, 'app/dist')
 const microsoftScopes = (
@@ -1954,6 +1955,24 @@ const server = createServer(async (req, res) => {
       })
 
       const payload = await response.json().catch(() => ({ error: 'Invalid response from advisor abuse endpoint' }))
+      sendJson(res, response.status, payload)
+      return
+    }
+
+    if (effectivePath === '/api/advisor-chats' && req.method === 'GET') {
+      if (!advisorAdminSecret) {
+        sendJson(res, 500, { error: 'Missing SEBCASTWALL_ADVISOR_ADMIN_SECRET' })
+        return
+      }
+
+      const limit = new URL(req.url, 'http://localhost').searchParams.get('limit') ?? '100'
+      const upstream = `${advisorChatsUrl}?limit=${encodeURIComponent(limit)}`
+
+      const response = await fetch(upstream, {
+        headers: { 'x-advisor-admin-secret': advisorAdminSecret },
+      })
+
+      const payload = await response.json().catch(() => ({ error: 'Invalid response from advisor chats endpoint' }))
       sendJson(res, response.status, payload)
       return
     }

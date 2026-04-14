@@ -103,19 +103,24 @@ export async function publishDraft(slug) {
   const mdxPath = await writeMdx(draft)
   const relMdxPath = path.relative(SEBCASTWALL_REPO, mdxPath)
 
-  try {
-    await gitCommitPush(relMdxPath, `content: add SEO article "${draft.title}"`)
-  } catch (e) {
-    throw new Error(`Git push failed: ${e.message}`)
-  }
-
-  await revalidate(slug)
-
   draft.status = 'published'
   draft.publishedAt = new Date().toISOString()
+  draft.pushedAt = null
   await writeDraft(draftPath, draft)
 
-  return { slug, mdxPath: relMdxPath, publishedAt: draft.publishedAt }
+  // Git push is best-effort — MDX is on disk regardless
+  let pushed = false
+  try {
+    await gitCommitPush(relMdxPath, `content: add SEO article "${draft.title}"`)
+    pushed = true
+    draft.pushedAt = new Date().toISOString()
+    await writeDraft(draftPath, draft)
+    await revalidate(slug)
+  } catch (e) {
+    console.warn(`[seo-publisher] Git push failed (non-fatal, MDX is on disk): ${e.message}`)
+  }
+
+  return { slug, mdxPath: relMdxPath, publishedAt: draft.publishedAt, pushed }
 }
 
 export async function updateDraft(slug, updates) {
@@ -136,6 +141,8 @@ export async function updateDraft(slug, updates) {
     const relMdxPath = path.relative(SEBCASTWALL_REPO, mdxPath)
     try {
       await gitCommitPush(relMdxPath, `content: update SEO article "${draft.title}"`)
+      draft.pushedAt = new Date().toISOString()
+      await writeDraft(draftPath, draft)
       await revalidate(slug)
     } catch (e) {
       console.warn(`[seo-publisher] Git push failed during update (non-fatal): ${e.message}`)

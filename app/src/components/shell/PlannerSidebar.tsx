@@ -14,6 +14,7 @@ interface PlannerSidebarProps {
     | 'bg-remover'
     | 'articles'
     | 'advisor-abuse'
+    | 'advisor-chats'
     | 'jobs'
   onNavigate: (path: string) => void
 }
@@ -33,6 +34,7 @@ const items = [
   { id: 'bg-remover', label: 'BG Remover', path: '/bg-remover' },
   { id: 'articles', label: 'SEO Artiklar', path: '/articles' },
   { id: 'advisor-abuse', label: 'Advisor Abuse', path: '/advisor-abuse' },
+  { id: 'advisor-chats', label: 'Advisor Chattar', path: '/advisor-chats' },
   { id: 'jobs', label: 'Batch Jobs', path: '/jobs' },
 ] as const
 

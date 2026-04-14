@@ -14,6 +14,7 @@ import ServiceExplainerPage from './pages/ServiceExplainerPage'
 import ArticlesPage from './pages/ArticlesPage'
 import BatchJobsPage from './pages/BatchJobsPage'
 import AdvisorAbusePage from './pages/AdvisorAbusePage'
+import AdvisorChatsPage from './pages/AdvisorChatsPage'
 import { routePath, stripBasePath } from './data/runtimePaths'
 
 type Route =
@@ -31,6 +32,7 @@ type Route =
   | { kind: 'bg-remover' }
   | { kind: 'articles' }
   | { kind: 'advisor-abuse' }
+  | { kind: 'advisor-chats' }
   | { kind: 'jobs' }
 
 function parseRoute(pathname: string): Route {
@@ -48,6 +50,7 @@ function parseRoute(pathname: string): Route {
   if (relativePath === '/bg-remover') return { kind: 'bg-remover' }
   if (relativePath === '/articles') return { kind: 'articles' }
   if (relativePath === '/advisor-abuse') return { kind: 'advisor-abuse' }
+  if (relativePath === '/advisor-chats') return { kind: 'advisor-chats' }
   if (relativePath === '/jobs') return { kind: 'jobs' }
 
   const boardMatch = relativePath.match(/^\/boards\/([^/]+)$/)
@@ -162,6 +165,10 @@ function App() {
 
   if (route.kind === 'advisor-abuse') {
     return <AdvisorAbusePage onNavigate={navigate} theme={theme} onSetTheme={setTheme} />
+  }
+
+  if (route.kind === 'advisor-chats') {
+    return <AdvisorChatsPage onNavigate={navigate} theme={theme} onSetTheme={setTheme} />
   }
 
   if (route.kind === 'jobs') {
