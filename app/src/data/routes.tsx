@@ -25,6 +25,9 @@ import ArticlesPage from '../pages/ArticlesPage'
 import AdvisorAbusePage from '../pages/AdvisorAbusePage'
 import AdvisorChatsPage from '../pages/AdvisorChatsPage'
 import BatchJobsPage from '../pages/BatchJobsPage'
+import SeoCheckerPage from '../pages/SeoCheckerPage'
+import ShortFormVideoPage from '../pages/ShortFormVideoPage'
+import AgentsPage from '../pages/AgentsPage'
 
 export type NavigateFn = (path: string) => void
 
@@ -143,10 +146,22 @@ export const routes: RouteConfig[] = [
     render: (p) => <BgRemoverPage {...p} />,
   },
   {
+    id: 'short-form',
+    path: '/short-form',
+    label: 'Short-Form',
+    render: (p) => <ShortFormVideoPage {...p} />,
+  },
+  {
     id: 'articles',
     path: '/articles',
     label: 'SEO Artiklar',
     render: (p) => <ArticlesPage {...p} />,
+  },
+  {
+    id: 'agents',
+    path: '/agents',
+    label: 'Agents',
+    render: (p) => <AgentsPage {...p} />,
   },
   {
     id: 'advisor-abuse',
@@ -165,6 +180,12 @@ export const routes: RouteConfig[] = [
     path: '/jobs',
     label: 'Batch Jobs',
     render: (p) => <BatchJobsPage {...p} />,
+  },
+  {
+    id: 'seo-checker',
+    path: '/seo-checker',
+    label: 'SEO Checker',
+    render: (p) => <SeoCheckerPage {...p} />,
   },
 ]
 

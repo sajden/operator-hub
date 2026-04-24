@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "render:job": "node src/render-job.mjs",
+    "render:intro-zoom": "node src/render-intro-zoom.mjs",
     "preview": "remotion studio src/index.mjs"
   },
   "dependencies": {

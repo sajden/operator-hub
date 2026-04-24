@@ -11,13 +11,26 @@ services:
       OPERATOR_HUB_PUBLIC_URL: ${OPERATOR_HUB_PUBLIC_URL:-http://127.0.0.1:8787}
       OPERATOR_HUB_MS_TENANT_ID: ${OPERATOR_HUB_MS_TENANT_ID:-common}
       OPERATOR_HUB_MS_CLIENT_ID: ${OPERATOR_HUB_MS_CLIENT_ID:-}
-      OPERATOR_HUB_MS_SCOPES: ${OPERATOR_HUB_MS_SCOPES:-openid profile offline_access User.Read Files.Read}
+      OPERATOR_HUB_MS_CLIENT_SECRET: ${OPERATOR_HUB_MS_CLIENT_SECRET:-}
+      OPERATOR_HUB_MS_SCOPES: ${OPERATOR_HUB_MS_SCOPES:-openid profile offline_access User.Read Files.ReadWrite.All Sites.ReadWrite.All}
+      OPERATOR_HUB_MS_USE_CLIENT_CREDENTIALS: ${OPERATOR_HUB_MS_USE_CLIENT_CREDENTIALS:-false}
+      OPERATOR_HUB_MS_DRIVE_USER: ${OPERATOR_HUB_MS_DRIVE_USER:-}
+      BGREMOVER_URL: ${BGREMOVER_URL:-http://bgremover:8095}
+      BG_WATCH_INPUT: /workspace/bg-input
+      BG_WATCH_OUTPUT: /workspace/bg-output
+      SEO_HUB_URL: ${SEO_HUB_URL:-http://host.docker.internal:3001}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8787:8787"
     volumes:
       - ./projects:/workspace/projects
       - ./.local:/workspace/.local
+      - ${BG_INPUT_HOST_DIR:-./data/bg-input}:/workspace/bg-input
+      - ${BG_OUTPUT_HOST_DIR:-./data/bg-output}:/workspace/bg-output
     working_dir: /workspace/hub
+    depends_on:
+      - bgremover
 
   app:
     image: node:20-alpine
@@ -33,6 +46,23 @@ services:
       - app_node_modules:/workspace/app/node_modules
     depends_on:
       - hub
+
+  bgremover:
+    build:
+      context: ../bg-remover
+      dockerfile: Dockerfile.server
+    container_name: operator-hub-bgremover
+    restart: unless-stopped
+    environment:
+      BGR_OUTPUT_DIR: /output
+      BGR_INPUT_DIR: /input
+      BGR_PORT: "8095"
+    volumes:
+      - ${BG_INPUT_HOST_DIR:-./data/bg-input}:/input
+      - ${BG_OUTPUT_HOST_DIR:-./data/bg-output}:/output
+      - ${U2NET_HOME_HOST_DIR:-./data/u2net}:/root/.u2net
+    expose:
+      - "8095"
 
 volumes:
   app_node_modules:

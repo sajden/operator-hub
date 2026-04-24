@@ -52,6 +52,7 @@ export default function PlannerTopbar({
             <option value="ha">HA map</option>
             <option value="tv">TV wallboard</option>
             <option value="bg-remover">BG Remover</option>
+            <option value="seo-checker">SEO Checker</option>
           </select>
         </label>
 

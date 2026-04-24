@@ -18,9 +18,27 @@ import { getAvailablePlannerActions, runPlannerAction } from './plannerActions.m
 import { startBgRemoverJob, getBgRemoverJob, getBgRemoverResult } from './bgRemoverTools.mjs'
 import { startWatcher, getWatcherStatus } from './bgRemoverWatcher.mjs'
 import { startCloudWatcher, getCloudWatcherStatus } from './bgRemoverCloudWatcher.mjs'
+import {
+  createShortFormJob,
+  getShortFormJob,
+  getShortFormWatchersStatus,
+  listShortFormJobs,
+  prepareShortFormJob,
+  renderShortFormJob,
+  rerunShortFormArticleCapture,
+  retryShortFormUpload,
+  updateShortFormArticle,
+  previewShortFormArticle,
+  approveShortFormArticle,
+  findMoreShortFormArticles,
+  screenshotUrlPreview
+} from './shortFormVideoTools.mjs'
+import { startShortFormWatcher } from './shortFormWatcher.mjs'
+import { startShortFormCloudWatcher } from './shortFormCloudWatcher.mjs'
+import { startSlotCloudWatcher } from './slotCloudWatcher.mjs'
+import { initCloudUpload } from './shortFormCloudUpload.mjs'
+import { agents, getAgent } from './agents/index.mjs'
 import { getGallery, resolveFilePath, renameFile, deleteFile, createAlbum } from './mediaFileManager.mjs'
-import { generateArticle, startWeeklyScheduler, getSeoSchedulerStatus } from './seoArticleGenerator.mjs'
-import { publishDraft, updateDraft, unpublishDraft } from './seoPublisher.mjs'
 import { getPlannerBoardPayload, getPlannerDashboardPayload } from './plannerQueries.mjs'
 import {
   cleanupPlannerCalendarImports,
@@ -48,6 +66,75 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(__dirname, '..')
+
+// In-memory status for background research runs
+const researchRunStatus = new Map() // slug → 'running' | 'done' | 'error'
+const researchRunError = new Map()  // slug → string | null
+
+async function readRawRequestBody(req) {
+  return await new Promise((resolve, reject) => {
+    const chunks = []
+    req.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
+    req.on('end', () => resolve(Buffer.concat(chunks)))
+    req.on('error', reject)
+  })
+}
+
+async function getSeoHubSchedulerStatus() {
+  try {
+    const response = await fetch(`${seoHubUrl}/api/seo-hub/scheduler/status`, {
+      signal: AbortSignal.timeout(5000),
+    })
+
+    if (!response.ok) {
+      const message = await response.text().catch(() => '')
+      throw new Error(`HTTP ${response.status}${message ? `: ${message.slice(0, 160)}` : ''}`)
+    }
+
+    return await response.json()
+  } catch (error) {
+    return {
+      enabled: false,
+      running: false,
+      scheduleSummary: 'seo-hub ej tillgänglig',
+      nextRunAt: null,
+      lastRunAt: null,
+      lastRunStatus: null,
+      lastRunSlug: null,
+      lastRunError: `seo-hub offline: ${error.message}`,
+      sites: [],
+    }
+  }
+}
+
+async function proxySeoHubRequest(req, res, effectivePath) {
+  const upstreamUrl = `${seoHubUrl}${effectivePath}`
+  const method = req.method ?? 'GET'
+  const body = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method) ? await readRawRequestBody(req) : undefined
+  const headers = {}
+
+  if (req.headers['content-type']) headers['content-type'] = req.headers['content-type']
+  if (req.headers.accept) headers.accept = req.headers.accept
+
+  const upstream = await fetch(upstreamUrl, {
+    method,
+    headers,
+    ...(body && body.length > 0 ? { body } : {}),
+  })
+
+  const payload = Buffer.from(await upstream.arrayBuffer())
+  const contentType = upstream.headers.get('content-type')
+  const location = upstream.headers.get('location')
+
+  res.statusCode = upstream.status
+  if (contentType) res.setHeader('Content-Type', contentType)
+  if (location) {
+    const rewrittenLocation = location.startsWith(seoHubUrl) ? location.slice(seoHubUrl.length) || '/' : location
+    res.setHeader('Location', rewrittenLocation)
+  }
+
+  res.end(payload)
+}
 
 function loadEnvFile(filePath) {
   if (!existsSync(filePath)) return
@@ -86,6 +173,7 @@ const appBasePath = (process.env.OPERATOR_HUB_APP_BASE_PATH ?? '/operatorhub-app
 const advisorAbuseUrl = process.env.SEBCASTWALL_ADVISOR_ABUSE_URL ?? 'http://127.0.0.1:3300/api/advisor/abuse'
 const advisorChatsUrl = process.env.SEBCASTWALL_ADVISOR_CHATS_URL ?? 'http://127.0.0.1:3300/api/advisor/chats'
 const advisorAdminSecret = process.env.SEBCASTWALL_ADVISOR_ADMIN_SECRET ?? ''
+const seoHubUrl = process.env.SEO_HUB_URL ?? 'http://127.0.0.1:3001'
 const frontendDistDir = path.resolve(repoRoot, 'app/dist')
 const microsoftScopes = (
   process.env.OPERATOR_HUB_MS_SCOPES ?? 'openid profile offline_access User.Read Files.Read Calendars.ReadWrite'
@@ -100,7 +188,9 @@ const microsoftAuth = createMicrosoftAuth({
   clientId: process.env.OPERATOR_HUB_MS_CLIENT_ID ?? '',
   clientSecret: process.env.OPERATOR_HUB_MS_CLIENT_SECRET ?? '',
   scopes: microsoftScopes,
-  tokenFilePath: path.resolve(repoRoot, '.local/microsoft-auth.json')
+  tokenFilePath: path.resolve(repoRoot, '.local/microsoft-auth.json'),
+  useClientCredentials: process.env.OPERATOR_HUB_MS_USE_CLIENT_CREDENTIALS === 'true',
+  driveUser: process.env.OPERATOR_HUB_MS_DRIVE_USER ?? null
 })
 
 function sendJson(res, statusCode, payload) {
@@ -161,6 +251,13 @@ function resolveFrontendAssetPath(rawUrl) {
 function serveFrontendAsset(res, filePath) {
   res.statusCode = 200
   res.setHeader('Content-Type', getContentType(filePath))
+  // Hashed assets (e.g. index-DQ4BnTTu.js) can be cached forever.
+  // index.html must never be cached so the browser always gets fresh asset refs.
+  if (/\/assets\/[^/]+-[a-zA-Z0-9]{8}\.[a-z]+$/.test(filePath)) {
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+  } else {
+    res.setHeader('Cache-Control', 'no-store')
+  }
   createReadStream(filePath).pipe(res)
 }
 
@@ -1894,11 +1991,152 @@ const server = createServer(async (req, res) => {
       return
     }
 
+    // ── Short-form video builder ────────────────────────────────────────
+    if (effectivePath === '/api/short-form/jobs' && req.method === 'GET') {
+      sendJson(res, 200, { jobs: await listShortFormJobs() })
+      return
+    }
+
+    if (effectivePath === '/api/short-form/jobs' && req.method === 'POST') {
+      const body = await readJsonBody(req)
+      const job = await createShortFormJob(body)
+      sendJson(res, 201, { jobId: job.id })
+      return
+    }
+
+    const shortFormJobMatch = effectivePath.match(/^\/api\/short-form\/jobs\/([^/]+)$/)
+    if (shortFormJobMatch && req.method === 'GET') {
+      const job = await getShortFormJob(decodeURIComponent(shortFormJobMatch[1]))
+      if (!job) {
+        sendJson(res, 404, { message: 'Job not found', code: 'SHORT_FORM_JOB_NOT_FOUND' })
+        return
+      }
+      sendJson(res, 200, { job })
+      return
+    }
+
+    const shortFormPrepareMatch = effectivePath.match(/^\/api\/short-form\/jobs\/([^/]+)\/prepare$/)
+    if (shortFormPrepareMatch && req.method === 'POST') {
+      const jobId = decodeURIComponent(shortFormPrepareMatch[1])
+      await prepareShortFormJob(jobId)
+      sendJson(res, 202, { ok: true, status: 'preparing' })
+      return
+    }
+
+    const shortFormRenderMatch = effectivePath.match(/^\/api\/short-form\/jobs\/([^/]+)\/render$/)
+    if (shortFormRenderMatch && req.method === 'POST') {
+      const jobId = decodeURIComponent(shortFormRenderMatch[1])
+      await renderShortFormJob(jobId)
+      sendJson(res, 202, { ok: true, status: 'rendering' })
+      return
+    }
+
+    const shortFormArticleMatch = effectivePath.match(/^\/api\/short-form\/jobs\/([^/]+)\/article$/)
+    if (shortFormArticleMatch && req.method === 'POST') {
+      const body = await readJsonBody(req)
+      const jobId = decodeURIComponent(shortFormArticleMatch[1])
+      const job = await updateShortFormArticle(jobId, body.manualArticleUrl ?? null)
+      sendJson(res, 200, { ok: true, articleSource: job.config.manualArticleUrl ? 'manual_ui' : 'none' })
+      return
+    }
+
+    const shortFormRerunArticleMatch = effectivePath.match(/^\/api\/short-form\/jobs\/([^/]+)\/rerun-article-capture$/)
+    if (shortFormRerunArticleMatch && req.method === 'POST') {
+      const jobId = decodeURIComponent(shortFormRerunArticleMatch[1])
+      await rerunShortFormArticleCapture(jobId)
+      sendJson(res, 202, { ok: true, status: 'preparing' })
+      return
+    }
+
+    const shortFormRetryUploadMatch = effectivePath.match(/^\/api\/short-form\/jobs\/([^/]+)\/retry-upload$/)
+    if (shortFormRetryUploadMatch && req.method === 'POST') {
+      const jobId = decodeURIComponent(shortFormRetryUploadMatch[1])
+      retryShortFormUpload(jobId).catch(err => console.error('[retry-upload]', err.message))
+      sendJson(res, 202, { ok: true, status: 'uploading' })
+      return
+    }
+
+    const shortFormApproveArticleMatch = effectivePath.match(/^\/api\/short-form\/jobs\/([^/]+)\/approve-article$/)
+    if (shortFormApproveArticleMatch && req.method === 'POST') {
+      const jobId = decodeURIComponent(shortFormApproveArticleMatch[1])
+      const body = await readJsonBody(req)
+      const articleUrl = String(body?.articleUrl ?? '').trim()
+      if (!articleUrl) { sendJson(res, 400, { error: 'articleUrl required' }); return }
+      try {
+        const job = await approveShortFormArticle(jobId, articleUrl)
+        sendJson(res, 200, { ok: true, status: job.status })
+      } catch (err) {
+        sendJson(res, 500, { error: err.message })
+      }
+      return
+    }
+
+    const shortFormFindMoreArticlesMatch = effectivePath.match(/^\/api\/short-form\/jobs\/([^/]+)\/find-more-articles$/)
+    if (shortFormFindMoreArticlesMatch && req.method === 'POST') {
+      const jobId = decodeURIComponent(shortFormFindMoreArticlesMatch[1])
+      try {
+        const result = await findMoreShortFormArticles(jobId)
+        sendJson(res, 200, { ok: true, ...result })
+      } catch (err) {
+        sendJson(res, 500, { error: err.message })
+      }
+      return
+    }
+
+    if (effectivePath === '/api/short-form/screenshot-preview' && req.method === 'POST') {
+      const body = await readJsonBody(req)
+      const articleUrl = String(body?.url ?? '').trim()
+      if (!articleUrl) { sendJson(res, 400, { error: 'url required' }); return }
+      try {
+        const result = await screenshotUrlPreview(articleUrl)
+        sendJson(res, 200, result)
+      } catch (err) {
+        sendJson(res, 500, { error: err.message })
+      }
+      return
+    }
+
+    if (effectivePath === '/api/short-form/preview' && req.method === 'POST') {
+      const body = await readJsonBody(req)
+      const transcript = String(body?.transcript ?? '').trim()
+      if (!transcript) { sendJson(res, 400, { error: 'transcript required' }); return }
+      const result = await previewShortFormArticle(transcript)
+      sendJson(res, 200, result)
+      return
+    }
+
+    if (effectivePath === '/api/short-form/watchers' && req.method === 'GET') {
+      sendJson(res, 200, await getShortFormWatchersStatus())
+      return
+    }
+
+    // ── Agents ────────────────────────────────────────────────────────────
+    if (effectivePath === '/api/agents' && req.method === 'GET') {
+      sendJson(res, 200, { agents: agents.map(a => a.meta) })
+      return
+    }
+
+    const agentRunMatch = effectivePath.match(/^\/api\/agents\/([^/]+)\/run$/)
+    if (agentRunMatch && req.method === 'POST') {
+      const agentId = agentRunMatch[1]
+      const agent = getAgent(agentId)
+      if (!agent) { sendJson(res, 404, { ok: false, message: 'Agent not found' }); return }
+      const input = await readJsonBody(req)
+      try {
+        const output = await agent.run(input)
+        sendJson(res, 200, { ok: true, output })
+      } catch (err) {
+        sendJson(res, 500, { ok: false, message: err.message })
+      }
+      return
+    }
+
     // ── Batch jobs overview ────────────────────────────────────────────────
     if (effectivePath === '/api/jobs' && req.method === 'GET') {
       const local = getWatcherStatus()
       const cloud = getCloudWatcherStatus()
-      const seo = getSeoSchedulerStatus()
+      const seo = await getSeoHubSchedulerStatus()
+      const shortForm = await getShortFormWatchersStatus()
 
       sendJson(res, 200, {
         jobs: [
@@ -1925,11 +2163,33 @@ const server = createServer(async (req, res) => {
             recentJobs: cloud.jobs.slice(0, 10),
           },
           {
+            id: 'short-form-local',
+            name: 'Short-Form Builder (lokal)',
+            description: 'Bevakar lokala jobbfolders och registrerar short-form-videoprojekt',
+            type: 'watcher',
+            schedule: 'Var 10:e sekund (kontinuerlig)',
+            inputDir: shortForm.localWatcher.inputDir,
+            outputDir: '.local/short-form-video/jobs',
+            queueLength: shortForm.localWatcher.jobs.filter(j => j.status === 'processing' || j.status === 'queued').length,
+            recentJobs: shortForm.localWatcher.jobs.slice(0, 10),
+          },
+          {
+            id: 'short-form-cloud',
+            name: 'Short-Form Builder (OneDrive)',
+            description: 'Förbereder samma pipeline för OneDrive-baserade jobbfolders',
+            type: 'watcher',
+            schedule: 'Konfigurerad watcher',
+            inputPath: shortForm.cloudWatcher.inputPath,
+            outputPath: shortForm.cloudWatcher.outputPath,
+            queueLength: shortForm.cloudWatcher.jobs.filter(j => j.status === 'processing' || j.status === 'queued').length,
+            recentJobs: shortForm.cloudWatcher.jobs.slice(0, 10),
+          },
+          {
             id: 'seo-generator',
             name: 'SEO Artikelgenerator',
-            description: 'Genererar SEO-artiklar baserat på Google Trends en gång i veckan',
+            description: 'Genererar SEO-artiklar via seo-hub enligt site-konfigurationen',
             type: 'scheduler',
-            schedule: 'Varje måndag 08:00',
+            schedule: seo.scheduleSummary ?? 'Enligt seo-hub-config',
             nextRunAt: seo.nextRunAt,
             lastRunAt: seo.lastRunAt,
             lastRunStatus: seo.lastRunStatus,
@@ -1977,124 +2237,30 @@ const server = createServer(async (req, res) => {
       return
     }
 
-    // ── SEO Articles ───────────────────────────────────────────────────────
-    if (effectivePath === '/api/articles' && req.method === 'GET') {
-      try {
-        const draftsDir = path.resolve(repoRoot, '.local/seo-drafts')
-        const sebcastwallArticles = process.env.SEO_PUBLISH_REPO
-          ? path.join(process.env.SEO_PUBLISH_REPO, 'content/articles')
-          : '/home/sajden/github/sebcastwall/content/articles'
-        await mkdir(draftsDir, { recursive: true })
-        const files = await readdir(draftsDir)
-        const drafts = []
-        for (const f of files.filter(f => f.endsWith('.json'))) {
-          try {
-            const data = JSON.parse(await readFile(path.join(draftsDir, f), 'utf-8'))
-            // Cross-check: does the MDX file actually exist on disk?
-            data.mdxOnDisk = existsSync(path.join(sebcastwallArticles, `${data.slug}.mdx`))
-            drafts.push(data)
-          } catch {}
-        }
-        drafts.sort((a, b) => (b.generatedAt ?? '').localeCompare(a.generatedAt ?? ''))
-        sendJson(res, 200, drafts)
-      } catch (e) {
-        sendJson(res, 500, { error: String(e) })
-      }
-      return
-    }
 
-    const articleSlugMatch = effectivePath.match(/^\/api\/articles\/([^/]+)$/)
-    if (articleSlugMatch && req.method === 'GET') {
-      const slug = decodeURIComponent(articleSlugMatch[1])
-      const filePath = path.resolve(repoRoot, `.local/seo-drafts/${slug}.json`)
-      try {
-        const data = JSON.parse(await readFile(filePath, 'utf-8'))
-        sendJson(res, 200, data)
-      } catch {
-        sendJson(res, 404, { error: 'Not found' })
-      }
-      return
-    }
-
-    const articleActionMatch = effectivePath.match(/^\/api\/articles\/([^/]+)\/(approve|reject)$/)
-    if (articleActionMatch && req.method === 'POST') {
-      const slug = decodeURIComponent(articleActionMatch[1])
-      const action = articleActionMatch[2]
-      const filePath = path.resolve(repoRoot, `.local/seo-drafts/${slug}.json`)
-      try {
-        const data = JSON.parse(await readFile(filePath, 'utf-8'))
-        data.status = action === 'approve' ? 'approved' : 'rejected'
-        data.reviewedAt = new Date().toISOString()
-        await writeFile(filePath, JSON.stringify(data, null, 2))
-        sendJson(res, 200, { ok: true, status: data.status })
-      } catch {
-        sendJson(res, 404, { error: 'Not found' })
-      }
-      return
-    }
-
-    // PATCH /api/articles/:slug — update fields (+ re-publish MDX if published)
-    if (articleSlugMatch && req.method === 'PATCH') {
-      const slug = decodeURIComponent(articleSlugMatch[1])
-      try {
-        const body = await readJsonBody(req)
-        const draft = await updateDraft(slug, body)
-        sendJson(res, 200, { ok: true, draft })
-      } catch (e) {
-        sendJson(res, 500, { error: String(e) })
-      }
-      return
-    }
-
-    // DELETE /api/articles/:slug — unpublish (remove MDX, revert to approved)
-    if (articleSlugMatch && req.method === 'DELETE') {
-      const slug = decodeURIComponent(articleSlugMatch[1])
-      try {
-        const result = await unpublishDraft(slug)
-        sendJson(res, 200, { ok: true, ...result })
-      } catch (e) {
-        sendJson(res, 500, { error: String(e) })
-      }
-      return
-    }
-
-    const articlePublishMatch = effectivePath.match(/^\/api\/articles\/([^/]+)\/publish$/)
-    if (articlePublishMatch && req.method === 'POST') {
-      const slug = decodeURIComponent(articlePublishMatch[1])
-      try {
-        const result = await publishDraft(slug)
-        sendJson(res, 200, { ok: true, ...result })
-      } catch (e) {
-        sendJson(res, 500, { error: String(e) })
-      }
+    // ── SEO Articles / SEO-Hub ───────────────────────────────────────────
+    if (effectivePath.startsWith('/api/seo-hub/')) {
+      await proxySeoHubRequest(req, res, effectivePath)
       return
     }
 
     if (effectivePath === '/api/articles/generate' && req.method === 'POST') {
-      // Return immediately — generation runs in background (Codex can take 60-120s)
-      sendJson(res, 202, { ok: true, message: 'Generering startad…' })
-      generateArticle().then((draft) => {
-        console.log(`[seo-generator] Background generation complete: ${draft.slug}`)
-      }).catch((e) => {
-        console.error(`[seo-generator] Background generation failed: ${e.message}`)
+      const response = await fetch(`${seoHubUrl}/api/seo-hub/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
       })
+      const payload = await response.text()
+      res.statusCode = response.status
+      res.setHeader('Content-Type', response.headers.get('content-type') ?? 'application/json')
+      res.end(payload)
       return
     }
 
-    if (effectivePath === '/api/articles' && req.method === 'POST') {
-      try {
-        const body = await readJsonBody(req)
-        const draft = body
-        if (!draft.slug) { sendJson(res, 400, { error: 'slug required' }); return }
-        const draftsDir = path.resolve(repoRoot, '.local/seo-drafts')
-        await mkdir(draftsDir, { recursive: true })
-        draft.generatedAt = draft.generatedAt ?? new Date().toISOString()
-        draft.status = draft.status ?? 'pending'
-        await writeFile(path.join(draftsDir, `${draft.slug}.json`), JSON.stringify(draft, null, 2))
-        sendJson(res, 201, { ok: true })
-      } catch (e) {
-        sendJson(res, 400, { error: String(e) })
-      }
+    if (effectivePath.startsWith('/api/articles')) {
+      sendJson(res, 410, {
+        error: 'Gamla operator-hub SEO-routes är avvecklade. Använd seo-hub via /api/seo-hub/ui.',
+      })
       return
     }
 
@@ -2141,6 +2307,201 @@ const server = createServer(async (req, res) => {
       return
     }
 
+    // ── Research: trigger a new keyword analysis run (background) ─────────
+    if (effectivePath === '/api/research/run' && req.method === 'POST') {
+      const body = await readJsonBody(req)
+      const slug = String(body.slug ?? '').replace(/[^a-z0-9-]/gi, '').slice(0, 80)
+      const rawKeywords = String(body.keywords ?? '').split('\n').map(s => s.trim()).filter(Boolean)
+      if (!slug) { sendJson(res, 400, { error: 'Missing slug' }); return }
+      if (!rawKeywords.length) { sendJson(res, 400, { error: 'Missing keywords' }); return }
+
+      if (researchRunStatus.get(slug) === 'running') {
+        sendJson(res, 200, { started: false, reason: 'already_running' }); return
+      }
+
+      researchRunStatus.set(slug, 'running')
+      researchRunError.set(slug, null)
+
+      captureSearchDemandInsights({
+        project_slug: slug,
+        seed_queries: rawKeywords.slice(0, 20),
+        market: 'SE',
+        language: 'sv',
+        sources: ['google_keyword_planner'],
+        mode: 'background',
+        session_hint: 'google-ads-main',
+      }).then(() => {
+        researchRunStatus.set(slug, 'done')
+      }).catch(err => {
+        researchRunStatus.set(slug, 'error')
+        researchRunError.set(slug, err?.message ?? 'Unknown error')
+      })
+
+      sendJson(res, 200, { started: true, slug })
+      return
+    }
+
+    // ── Research: poll run status ─────────────────────────────────────────
+    if (effectivePath.startsWith('/api/research/run-status/') && req.method === 'GET') {
+      const slug = effectivePath.replace('/api/research/run-status/', '').replace(/[^a-z0-9-]/gi, '')
+      const status = researchRunStatus.get(slug) ?? 'idle'
+      const error = researchRunError.get(slug) ?? null
+      sendJson(res, 200, { status, error })
+      return
+    }
+
+    // ── Research: fetch README for a repo ────────────────────────────────
+    if (effectivePath.startsWith('/api/research/readme/') && req.method === 'GET') {
+      const repoSlug = effectivePath.replace('/api/research/readme/', '').replace(/[^a-z0-9_-]/gi, '').slice(0, 80)
+      if (!repoSlug) { sendJson(res, 400, { error: 'Missing repo' }); return }
+
+      const githubToken = process.env.GITHUB_TOKEN ?? ''
+      const apiUrl = `https://api.github.com/repos/sajden/${repoSlug}/contents/README.md`
+      try {
+        const ghRes = await fetch(apiUrl, {
+          headers: {
+            'Accept': 'application/vnd.github.raw+json',
+            'Authorization': `Bearer ${githubToken}`,
+            'X-GitHub-Api-Version': '2022-11-28',
+          },
+          signal: AbortSignal.timeout(10000),
+        })
+        if (!ghRes.ok) { sendJson(res, 404, { error: `README not found for "${repoSlug}" (HTTP ${ghRes.status})` }); return }
+        const content = await ghRes.text()
+        sendJson(res, 200, { content })
+      } catch (err) {
+        sendJson(res, 500, { error: `GitHub API error: ${err.message}` })
+      }
+      return
+    }
+
+    // ── Research: suggest seed keywords from repo content ─────────────────
+    if (effectivePath === '/api/research/suggest-keywords' && req.method === 'POST') {
+      const body = await readJsonBody(req)
+      const repoSlug = String(body.repo ?? '').replace(/[^a-z0-9/_-]/gi, '').slice(0, 80)
+      if (!repoSlug) { sendJson(res, 400, { error: 'Missing repo' }); return }
+
+      // Fetch README from GitHub API
+      const githubToken = process.env.GITHUB_TOKEN ?? ''
+      const githubOwner = 'sajden'
+      const githubCandidates = [
+        `${repoSlug}/README.md`,
+        `${repoSlug.split('/')[0]}/README.md`,
+      ]
+      let repoContent = ''
+      for (const filePath of githubCandidates) {
+        const [ghRepo, ...ghPathParts] = filePath.split('/')
+        const ghPath = ghPathParts.join('/')
+        const apiUrl = `https://api.github.com/repos/${githubOwner}/${ghRepo}/contents/${ghPath}`
+        try {
+          const ghRes = await fetch(apiUrl, {
+            headers: {
+              'Accept': 'application/vnd.github.raw+json',
+              'Authorization': `Bearer ${githubToken}`,
+              'X-GitHub-Api-Version': '2022-11-28',
+            },
+            signal: AbortSignal.timeout(10000),
+          })
+          if (ghRes.ok) {
+            repoContent = await ghRes.text()
+            break
+          }
+        } catch { /* skip */ }
+      }
+
+      if (!repoContent.trim()) {
+        sendJson(res, 404, { error: `Hittade ingen README för repo "${repoSlug}"` })
+        return
+      }
+
+      const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY ?? ''
+      if (!ANTHROPIC_API_KEY) {
+        sendJson(res, 500, { error: 'ANTHROPIC_API_KEY saknas i .env.local' })
+        return
+      }
+      const prompt = `Du är en SEO-expert. Baserat på denna produktbeskrivning, ge mig 8-10 svenska seed-sökord som en person skulle söka på Google för att hitta den här sajten. Skriv bara sökorden, ett per rad, inga punkter eller numrering.\n\n${repoContent}`
+
+      try {
+        const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': ANTHROPIC_API_KEY,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 256,
+            messages: [{ role: 'user', content: prompt }],
+          }),
+          signal: AbortSignal.timeout(30000),
+        })
+        if (!aiRes.ok) {
+          const errText = await aiRes.text()
+          throw new Error(`Anthropic ${aiRes.status}: ${errText}`)
+        }
+        const data = await aiRes.json()
+        const text = data.content?.[0]?.text ?? ''
+        const keywords = text.split('\n').map(s => s.trim()).filter(s => s.length > 2 && s.length < 80)
+        sendJson(res, 200, { keywords })
+      } catch (err) {
+        sendJson(res, 500, { error: `AI ej tillgänglig: ${err.message}` })
+      }
+      return
+    }
+
+    // ── Research: latest saved result for a project slug ──────────────────
+    if (effectivePath.startsWith('/api/research/latest-result/')) {
+      const slug = effectivePath.replace('/api/research/latest-result/', '').replace(/[^a-z0-9-]/gi, '')
+      if (!slug) { sendJson(res, 400, { error: 'Missing slug' }); return }
+      const manifestPath = path.resolve(repoRoot, '.local/research/search-demand', slug, 'manifest.json')
+      try {
+        const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+        const runs = manifest.runs ?? []
+        if (!runs.length) { sendJson(res, 404, { error: 'No runs found' }); return }
+        const latest = runs[runs.length - 1]
+        const normalizedArtifact = latest.artifacts?.find(a => a.type === 'normalized_result')
+        if (!normalizedArtifact) { sendJson(res, 404, { error: 'No normalized result' }); return }
+        const resultPath = path.resolve(repoRoot, normalizedArtifact.local_path)
+        const result = JSON.parse(await readFile(resultPath, 'utf8'))
+        sendJson(res, 200, result)
+      } catch {
+        sendJson(res, 404, { error: `No research data found for "${slug}"` })
+      }
+      return
+    }
+
+    // ── SEO Checker proxy ─────────────────────────────────────────────────
+    // Forwards requests to the seo-checker service running on port 3010.
+    const SEO_CHECKER_BASE = process.env.SEO_CHECKER_URL ?? 'http://host.docker.internal:3010'
+
+    if (effectivePath.startsWith('/api/seo-checker/')) {
+      const upstreamPath = effectivePath.replace('/api/seo-checker', '')
+      const upstreamUrl = `${SEO_CHECKER_BASE}/api${upstreamPath}`
+
+      let body = undefined
+      if (req.method === 'POST' || req.method === 'PATCH') {
+        body = await new Promise((resolve, reject) => {
+          let raw = ''
+          req.on('data', chunk => { raw += chunk })
+          req.on('end', () => resolve(raw))
+          req.on('error', reject)
+        })
+      }
+
+      const upstream = await fetch(upstreamUrl, {
+        method: req.method,
+        headers: { 'Content-Type': 'application/json' },
+        ...(body ? { body } : {})
+      })
+
+      const text = await upstream.text()
+      res.statusCode = upstream.status
+      res.setHeader('Content-Type', upstream.headers.get('content-type') ?? 'application/json')
+      res.end(text)
+      return
+    }
+
     sendJson(res, 404, { ok: false, message: 'Not found' })
   } catch (error) {
     sendJson(res, getErrorStatusCode(error), {
@@ -2150,12 +2511,34 @@ const server = createServer(async (req, res) => {
   }
 })
 
+async function shortFormJobRunner() {
+  try {
+    const jobs = await listShortFormJobs()
+    for (const job of jobs) {
+      if (job.status === 'queued') {
+        console.log(`[job-runner] preparing job ${job.id}`)
+        prepareShortFormJob(job.id).catch(err =>
+          console.error(`[job-runner] prepare ${job.id} failed:`, err.message)
+        )
+      } else if (job.status === 'prepared' || job.status === 'prepared_without_article') {
+        console.log(`[job-runner] rendering job ${job.id}`)
+        renderShortFormJob(job.id).catch(err =>
+          console.error(`[job-runner] render ${job.id} failed:`, err.message)
+        )
+      }
+    }
+  } catch (err) {
+    console.error('[job-runner] error:', err.message)
+  }
+}
+
 server.listen(port, host, () => {
   console.log(`operator-hub mini-hub listening on http://${host}:${port}`)
   startWatcher()
   startCloudWatcher(microsoftAuth, { repoRoot })
-  startWeeklyScheduler((err, draft) => {
-    if (err) console.error('[seo-scheduler] Weekly generation error:', err.message)
-    else console.log(`[seo-scheduler] Weekly article generated: ${draft.slug}`)
-  })
+  startShortFormWatcher()
+  startShortFormCloudWatcher()
+  startSlotCloudWatcher(microsoftAuth, { repoRoot })
+  initCloudUpload(microsoftAuth)
+  setInterval(() => void shortFormJobRunner(), 60_000)
 })
