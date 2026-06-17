@@ -16,6 +16,7 @@ const SLOTS_NOBG_BASE = process.env.BG_CLOUD_NOBG_BASE ?? 'Seb/Videos/no-bg-vide
 const SLOT_COUNT      = Number(process.env.BG_CLOUD_SLOT_COUNT ?? 10)
 const LOCAL_OUTPUT_DIR = process.env.BG_WATCH_OUTPUT ?? '/workspace/bg-output'
 const LOCAL_INPUT_DIR  = process.env.BG_WATCH_INPUT  ?? '/workspace/bg-input'
+const LOCAL_RAW_BASE   = process.env.LOCAL_RAW_BASE   ?? null  // local OneDrive sync, e.g. /mnt/onedrive-raw
 const MODEL   = process.env.BG_WATCH_MODEL ?? 'u2net_human_seg'
 const POLL_MS = 30_000
 const UPLOAD_CHUNK = 10 * 1024 * 1024  // 10 MB
@@ -262,15 +263,28 @@ async function processFile(fileName, itemId, lastModified, outputPath, jobKey) {
       const isLarge = fileSize >= LARGE_FILE_THRESHOLD
 
       let jobId
-      if (isLarge) {
-        const localInputPath = path.join(LOCAL_INPUT_DIR, fileName)
-        await downloadItemToFile(token, itemId, localInputPath)
-        setJob({ message: 'Bearbetar bakgrundsborttagning…' })
-        jobId = startBgRemoverJob({ filePath: `/input/${fileName}`, fileName, model: MODEL, alphaMatting: false })
-      } else {
-        const data = await downloadItem(token, itemId)
-        setJob({ message: 'Bearbetar bakgrundsborttagning…' })
-        jobId = startBgRemoverJob({ dataBase64: data.toString('base64'), fileName, model: MODEL, alphaMatting: false })
+      // Prefer local OneDrive sync — read locally instead of Graph API to avoid corrupt downloads
+      const slotKey = path.basename(outputPath)
+      const localSyncFile = LOCAL_RAW_BASE ? path.join(LOCAL_RAW_BASE, slotKey, fileName) : null
+      if (localSyncFile) {
+        try {
+          const data = await readFile(localSyncFile)
+          setJob({ message: 'Bearbetar bakgrundsborttagning…' })
+          jobId = startBgRemoverJob({ dataBase64: data.toString('base64'), fileName, model: MODEL, alphaMatting: false })
+          console.log(`[cloud-watcher] using local sync (${data.length} bytes): ${localSyncFile}`)
+        } catch { /* local file not available, fall through to Graph API */ }
+      }
+      if (!jobId) {
+        if (isLarge) {
+          const localInputPath = path.join(LOCAL_INPUT_DIR, fileName)
+          await downloadItemToFile(token, itemId, localInputPath)
+          setJob({ message: 'Bearbetar bakgrundsborttagning…' })
+          jobId = startBgRemoverJob({ filePath: `/input/${fileName}`, fileName, model: MODEL, alphaMatting: false })
+        } else {
+          const data = await downloadItem(token, itemId)
+          setJob({ message: 'Bearbetar bakgrundsborttagning…' })
+          jobId = startBgRemoverJob({ dataBase64: data.toString('base64'), fileName, model: MODEL, alphaMatting: false })
+        }
       }
 
       await new Promise((resolve, reject) => {
@@ -313,6 +327,7 @@ async function processFile(fileName, itemId, lastModified, outputPath, jobKey) {
     setJob({ message: 'Laddar upp till OneDrive…', progress: 95 })
     let token = await auth.ensureAccessToken()
     const { size: localSize } = await stat(resultPath)
+    if (localSize === 0) throw new Error(`bgremover produced 0-byte output: ${resultFileName}`)
     let uploadOk = false
     for (let attempt = 1; attempt <= 3 && !uploadOk; attempt++) {
       try {
@@ -345,7 +360,7 @@ async function processFile(fileName, itemId, lastModified, outputPath, jobKey) {
       }
     }
 
-    setJob({ status: 'done', message: 'Klar!', progress: 100, outputFileName: resultFileName })
+    setJob({ status: 'done', message: 'Klar!', progress: 100, outputFileName: resultFileName, processedLastModified: lastModified })
     console.log(`[cloud-watcher] ✓ ${fileName} → ${outputPath}/${resultFileName}`)
 
     // Persist success
@@ -355,9 +370,9 @@ async function processFile(fileName, itemId, lastModified, outputPath, jobKey) {
     delete state2.pendingUpload?.[itemId]
     await saveState(state2)
 
-    // Clean up local result file to free disk space
-    const localResult = path.join(LOCAL_OUTPUT_DIR, resultFileName)
-    await unlink(localResult).catch(() => {})
+    // Ask bgremover to delete its output file now that upload succeeded
+    const bgUrl = process.env.BGREMOVER_URL ?? 'http://bgremover:8095'
+    await fetch(`${bgUrl}/files/${encodeURIComponent(resultFileName)}`, { method: 'DELETE' }).catch(() => {})
 
   } catch (err) {
     const isCancelledByFlush = err.message.toLowerCase().includes('cancelled by flush')
@@ -399,22 +414,31 @@ async function pollSlot(token, slot, state) {
 
     const job = cloudJobs.get(jobKey)
     if (job && (job.status === 'queued' || job.status === 'processing')) continue
+    if (job?.status === 'done') continue
     if (job?.status === 'error' && job?.failedLastModified === item.lastModifiedDateTime) continue
 
-    if (state.processed[item.id] === item.lastModifiedDateTime) {
+    if (item.id in state.processed) {
       if (!cloudJobs.has(jobKey))
         cloudJobs.set(jobKey, { slot: slot.key, fileName: item.name, status: 'done', message: 'Redan klar', progress: 100, detectedAt: Date.now() })
       continue
     }
 
-    if (state.failed?.[item.id]?.lastModified === item.lastModifiedDateTime) {
-      if (!cloudJobs.has(jobKey))
-        cloudJobs.set(jobKey, {
-          slot: slot.key, fileName: item.name,
-          status: 'error', message: 'Fel (se logg)', progress: 0, detectedAt: Date.now(),
-          error: state.failed[item.id].error,
-        })
-      continue
+    const failedEntry = state.failed?.[item.id]
+    if (failedEntry?.lastModified === item.lastModifiedDateTime) {
+      const failedAgo = Date.now() - new Date(failedEntry.failedAt ?? 0).getTime()
+      if (failedAgo < 10 * 60 * 1000) {
+        if (!cloudJobs.has(jobKey))
+          cloudJobs.set(jobKey, {
+            slot: slot.key, fileName: item.name,
+            status: 'error', message: 'Fel (provar om inom 10 min)', progress: 0, detectedAt: Date.now(),
+            error: failedEntry.error,
+          })
+        continue
+      }
+      // Retry after 10 min — clear from failed so it gets queued again
+      console.log(`[cloud-watcher] retrying ${slot.key}/${item.name} (failed ${Math.round(failedAgo / 60000)}m ago)`)
+      delete state.failed[item.id]
+      await saveState(state)
     }
 
     console.log(`[cloud-watcher] queuing ${slot.key}/${item.name} itemId=${item.id}`)
@@ -448,7 +472,9 @@ export function getCloudWatcherStatus() {
 
 export function startCloudWatcher(microsoftAuth, { repoRoot = '/workspace/operator-hub', bgremoverUrl = null } = {}) {
   auth = microsoftAuth
-  stateFile = path.join(repoRoot, '.local/bg-cloud-state.json')
+  stateFile = process.env.OPERATOR_HUB_SHORT_FORM_ROOT
+    ? path.join(process.env.OPERATOR_HUB_SHORT_FORM_ROOT, 'bg-cloud-state.json')
+    : path.join(repoRoot, '.local/bg-cloud-state.json')
 
   const bgUrl = bgremoverUrl ?? process.env.BGREMOVER_URL ?? 'http://bgremover:8095'
   const slotDesc = SLOTS.length === 1 ? `${SLOTS[0].input} → ${SLOTS[0].output}` : `${SLOTS.length} slots (${SLOTS_RAW_BASE} → ${SLOTS_NOBG_BASE})`

@@ -133,13 +133,13 @@ function WatcherCard({ job, onNavigate }: { job: BatchJob; onNavigate: (p: strin
         )}
       </div>
 
-      {job.id === 'bg-remover-cloud' && (
+      {(job.id === 'bg-remover-cloud' || job.id.startsWith('short-form-')) && (
         <button
           type="button"
-          onClick={() => onNavigate('/bg-remover')}
+          onClick={() => onNavigate(job.id.startsWith('short-form-') ? '/short-form' : '/bg-remover')}
           style={linkBtnStyle}
         >
-          Öppna BG Remover →
+          {job.id.startsWith('short-form-') ? 'Öppna Short-Form →' : 'Öppna BG Remover →'}
         </button>
       )}
     </div>
@@ -295,10 +295,10 @@ export default function BatchJobsPage({ onNavigate, theme, onSetTheme }: BatchJo
     setTriggering('seo-generator')
     setMsg('')
     try {
-      const res = await fetch('/api/articles/generate', { method: 'POST' })
+      const res = await fetch('/api/seo-hub/generate', { method: 'POST' })
       const data = await res.json()
       if (res.ok) {
-        setMsg(`✓ Artikel skapad: ${data.title ?? data.slug}`)
+        setMsg(data.started ? '✓ SEO-generering startad' : `✓ Klart: ${data.draftCount ?? 0} utkast`)
         await load()
       } else {
         setMsg(`✗ ${data.error ?? 'Okänt fel'}`)

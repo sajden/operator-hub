@@ -93,8 +93,13 @@ async function main() {
   let speakerServer = null
   let speakerSrc = null
   if (args.speakerFrame) {
-    speakerServer = await serveFileHttp(path.resolve(args.speakerFrame))
-    speakerSrc = speakerServer.url
+    const ext = path.extname(args.speakerFrame).toLowerCase()
+    if (['.png', '.jpg', '.jpeg'].includes(ext)) {
+      speakerSrc = await toDataUri(args.speakerFrame)
+    } else {
+      speakerServer = await serveFileHttp(path.resolve(args.speakerFrame))
+      speakerSrc = speakerServer.url
+    }
   }
   const articleDataUri = await toDataUri(args.articleImage)
 

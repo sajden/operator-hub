@@ -111,15 +111,24 @@ export function ShortFormSplashIntro({ splashIntro }) {
       // Speaker video — transparent so background shows through
       // objectPosition 'center bottom' anchors speaker to bottom of grid, transformOrigin bottom keeps zoom centered there
       speakerSrc
-        ? React.createElement(OffthreadVideo, {
-            src: speakerSrc,
-            transparent: true,
-            style: {
-              position: 'absolute', inset: 0,
-              width: '100%', height: '100%', objectFit: 'contain',
-              objectPosition: 'center bottom'
-            }
-          })
+        ? String(speakerSrc).startsWith('data:image/')
+          ? React.createElement(Img, {
+              src: speakerSrc,
+              style: {
+                position: 'absolute', inset: 0,
+                width: '100%', height: '100%', objectFit: 'contain',
+                objectPosition: 'center bottom'
+              }
+            })
+          : React.createElement(OffthreadVideo, {
+              src: speakerSrc,
+              transparent: true,
+              style: {
+                position: 'absolute', inset: 0,
+                width: '100%', height: '100%', objectFit: 'contain',
+                objectPosition: 'center bottom'
+              }
+            })
         : null,
 
       // Bottom gradient — blends into dark panel

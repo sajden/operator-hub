@@ -17,26 +17,15 @@ import { renderServiceExplainerMotion, renderSiteHeroMotion } from './remotionTo
 import { getAvailablePlannerActions, runPlannerAction } from './plannerActions.mjs'
 import { startBgRemoverJob, getBgRemoverJob, getBgRemoverResult } from './bgRemoverTools.mjs'
 import { startWatcher, getWatcherStatus } from './bgRemoverWatcher.mjs'
-import { startCloudWatcher, getCloudWatcherStatus } from './bgRemoverCloudWatcher.mjs'
-import {
-  createShortFormJob,
-  getShortFormJob,
-  getShortFormWatchersStatus,
-  listShortFormJobs,
-  prepareShortFormJob,
-  renderShortFormJob,
-  rerunShortFormArticleCapture,
-  retryShortFormUpload,
-  updateShortFormArticle,
-  previewShortFormArticle,
-  approveShortFormArticle,
-  findMoreShortFormArticles,
-  screenshotUrlPreview
-} from './shortFormVideoTools.mjs'
-import { startShortFormWatcher } from './shortFormWatcher.mjs'
-import { startShortFormCloudWatcher } from './shortFormCloudWatcher.mjs'
-import { startSlotCloudWatcher } from './slotCloudWatcher.mjs'
-import { initCloudUpload } from './shortFormCloudUpload.mjs'
+const VIDEO_PIPELINE_URL = process.env.VIDEO_PIPELINE_URL ?? 'http://video-pipeline:3420'
+
+async function fetchPipeline(path) {
+  try {
+    const resp = await fetch(`${VIDEO_PIPELINE_URL}${path}`, { signal: AbortSignal.timeout(10000) })
+    if (!resp.ok) return null
+    return await resp.json()
+  } catch { return null }
+}
 import { agents, getAgent } from './agents/index.mjs'
 import { getGallery, resolveFilePath, renameFile, deleteFile, createAlbum } from './mediaFileManager.mjs'
 import { getPlannerBoardPayload, getPlannerDashboardPayload } from './plannerQueries.mjs'
@@ -259,6 +248,15 @@ function serveFrontendAsset(res, filePath) {
     res.setHeader('Cache-Control', 'no-store')
   }
   createReadStream(filePath).pipe(res)
+}
+
+async function readRawBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = ''
+    req.on('data', chunk => { data += chunk })
+    req.on('end', () => resolve(data || null))
+    req.on('error', reject)
+  })
 }
 
 async function readJsonBody(req) {
@@ -1987,126 +1985,32 @@ const server = createServer(async (req, res) => {
     }
 
     if (effectivePath === '/api/bg-remover/cloud-watcher' && req.method === 'GET') {
-      sendJson(res, 200, getCloudWatcherStatus())
+      sendJson(res, 200, await fetchPipeline('/bg-remover/cloud-watcher') ?? {})
       return
     }
 
-    // ── Short-form video builder ────────────────────────────────────────
-    if (effectivePath === '/api/short-form/jobs' && req.method === 'GET') {
-      sendJson(res, 200, { jobs: await listShortFormJobs() })
-      return
-    }
-
-    if (effectivePath === '/api/short-form/jobs' && req.method === 'POST') {
-      const body = await readJsonBody(req)
-      const job = await createShortFormJob(body)
-      sendJson(res, 201, { jobId: job.id })
-      return
-    }
-
-    const shortFormJobMatch = effectivePath.match(/^\/api\/short-form\/jobs\/([^/]+)$/)
-    if (shortFormJobMatch && req.method === 'GET') {
-      const job = await getShortFormJob(decodeURIComponent(shortFormJobMatch[1]))
-      if (!job) {
-        sendJson(res, 404, { message: 'Job not found', code: 'SHORT_FORM_JOB_NOT_FOUND' })
-        return
-      }
-      sendJson(res, 200, { job })
-      return
-    }
-
-    const shortFormPrepareMatch = effectivePath.match(/^\/api\/short-form\/jobs\/([^/]+)\/prepare$/)
-    if (shortFormPrepareMatch && req.method === 'POST') {
-      const jobId = decodeURIComponent(shortFormPrepareMatch[1])
-      await prepareShortFormJob(jobId)
-      sendJson(res, 202, { ok: true, status: 'preparing' })
-      return
-    }
-
-    const shortFormRenderMatch = effectivePath.match(/^\/api\/short-form\/jobs\/([^/]+)\/render$/)
-    if (shortFormRenderMatch && req.method === 'POST') {
-      const jobId = decodeURIComponent(shortFormRenderMatch[1])
-      await renderShortFormJob(jobId)
-      sendJson(res, 202, { ok: true, status: 'rendering' })
-      return
-    }
-
-    const shortFormArticleMatch = effectivePath.match(/^\/api\/short-form\/jobs\/([^/]+)\/article$/)
-    if (shortFormArticleMatch && req.method === 'POST') {
-      const body = await readJsonBody(req)
-      const jobId = decodeURIComponent(shortFormArticleMatch[1])
-      const job = await updateShortFormArticle(jobId, body.manualArticleUrl ?? null)
-      sendJson(res, 200, { ok: true, articleSource: job.config.manualArticleUrl ? 'manual_ui' : 'none' })
-      return
-    }
-
-    const shortFormRerunArticleMatch = effectivePath.match(/^\/api\/short-form\/jobs\/([^/]+)\/rerun-article-capture$/)
-    if (shortFormRerunArticleMatch && req.method === 'POST') {
-      const jobId = decodeURIComponent(shortFormRerunArticleMatch[1])
-      await rerunShortFormArticleCapture(jobId)
-      sendJson(res, 202, { ok: true, status: 'preparing' })
-      return
-    }
-
-    const shortFormRetryUploadMatch = effectivePath.match(/^\/api\/short-form\/jobs\/([^/]+)\/retry-upload$/)
-    if (shortFormRetryUploadMatch && req.method === 'POST') {
-      const jobId = decodeURIComponent(shortFormRetryUploadMatch[1])
-      retryShortFormUpload(jobId).catch(err => console.error('[retry-upload]', err.message))
-      sendJson(res, 202, { ok: true, status: 'uploading' })
-      return
-    }
-
-    const shortFormApproveArticleMatch = effectivePath.match(/^\/api\/short-form\/jobs\/([^/]+)\/approve-article$/)
-    if (shortFormApproveArticleMatch && req.method === 'POST') {
-      const jobId = decodeURIComponent(shortFormApproveArticleMatch[1])
-      const body = await readJsonBody(req)
-      const articleUrl = String(body?.articleUrl ?? '').trim()
-      if (!articleUrl) { sendJson(res, 400, { error: 'articleUrl required' }); return }
+    // ── Short-form video builder → proxy to video-pipeline ───────────────
+    if (effectivePath.startsWith('/api/short-form/')) {
+      const pipelineUrl = process.env.VIDEO_PIPELINE_URL ?? 'http://video-pipeline:3420'
+      const targetPath = effectivePath.replace('/api/short-form', '')
       try {
-        const job = await approveShortFormArticle(jobId, articleUrl)
-        sendJson(res, 200, { ok: true, status: job.status })
+        const body = req.method !== 'GET' && req.method !== 'HEAD' ? await readRawBody(req) : null
+        const upstream = await fetch(`${pipelineUrl}${targetPath}`, {
+          method: req.method,
+          headers: { 'Content-Type': 'application/json' },
+          body,
+          signal: AbortSignal.timeout(120000)
+        })
+        const contentType = upstream.headers.get('content-type') ?? 'application/octet-stream'
+        res.writeHead(upstream.status, { 'Content-Type': contentType, 'Access-Control-Allow-Origin': '*' })
+        if (contentType.startsWith('video/') || contentType.startsWith('image/')) {
+          upstream.body.pipeTo(new WritableStream({ write(chunk) { res.write(chunk) }, close() { res.end() } }))
+        } else {
+          res.end(await upstream.text())
+        }
       } catch (err) {
-        sendJson(res, 500, { error: err.message })
+        sendJson(res, 502, { error: `video-pipeline unavailable: ${err.message}` })
       }
-      return
-    }
-
-    const shortFormFindMoreArticlesMatch = effectivePath.match(/^\/api\/short-form\/jobs\/([^/]+)\/find-more-articles$/)
-    if (shortFormFindMoreArticlesMatch && req.method === 'POST') {
-      const jobId = decodeURIComponent(shortFormFindMoreArticlesMatch[1])
-      try {
-        const result = await findMoreShortFormArticles(jobId)
-        sendJson(res, 200, { ok: true, ...result })
-      } catch (err) {
-        sendJson(res, 500, { error: err.message })
-      }
-      return
-    }
-
-    if (effectivePath === '/api/short-form/screenshot-preview' && req.method === 'POST') {
-      const body = await readJsonBody(req)
-      const articleUrl = String(body?.url ?? '').trim()
-      if (!articleUrl) { sendJson(res, 400, { error: 'url required' }); return }
-      try {
-        const result = await screenshotUrlPreview(articleUrl)
-        sendJson(res, 200, result)
-      } catch (err) {
-        sendJson(res, 500, { error: err.message })
-      }
-      return
-    }
-
-    if (effectivePath === '/api/short-form/preview' && req.method === 'POST') {
-      const body = await readJsonBody(req)
-      const transcript = String(body?.transcript ?? '').trim()
-      if (!transcript) { sendJson(res, 400, { error: 'transcript required' }); return }
-      const result = await previewShortFormArticle(transcript)
-      sendJson(res, 200, result)
-      return
-    }
-
-    if (effectivePath === '/api/short-form/watchers' && req.method === 'GET') {
-      sendJson(res, 200, await getShortFormWatchersStatus())
       return
     }
 
@@ -2134,9 +2038,10 @@ const server = createServer(async (req, res) => {
     // ── Batch jobs overview ────────────────────────────────────────────────
     if (effectivePath === '/api/jobs' && req.method === 'GET') {
       const local = getWatcherStatus()
-      const cloud = getCloudWatcherStatus()
       const seo = await getSeoHubSchedulerStatus()
-      const shortForm = await getShortFormWatchersStatus()
+      const pipeline = await fetchPipeline('/watchers') ?? { localWatcher: { jobs: [] }, cloudWatcher: { jobs: [] } }
+      const shortForm = pipeline
+      const cloud = await fetchPipeline('/bg-remover/cloud-watcher') ?? { inputPath: '', outputPath: '', jobs: [] }
 
       sendJson(res, 200, {
         jobs: [
@@ -2511,34 +2416,7 @@ const server = createServer(async (req, res) => {
   }
 })
 
-async function shortFormJobRunner() {
-  try {
-    const jobs = await listShortFormJobs()
-    for (const job of jobs) {
-      if (job.status === 'queued') {
-        console.log(`[job-runner] preparing job ${job.id}`)
-        prepareShortFormJob(job.id).catch(err =>
-          console.error(`[job-runner] prepare ${job.id} failed:`, err.message)
-        )
-      } else if (job.status === 'prepared' || job.status === 'prepared_without_article') {
-        console.log(`[job-runner] rendering job ${job.id}`)
-        renderShortFormJob(job.id).catch(err =>
-          console.error(`[job-runner] render ${job.id} failed:`, err.message)
-        )
-      }
-    }
-  } catch (err) {
-    console.error('[job-runner] error:', err.message)
-  }
-}
-
 server.listen(port, host, () => {
   console.log(`operator-hub mini-hub listening on http://${host}:${port}`)
   startWatcher()
-  startCloudWatcher(microsoftAuth, { repoRoot })
-  startShortFormWatcher()
-  startShortFormCloudWatcher()
-  startSlotCloudWatcher(microsoftAuth, { repoRoot })
-  initCloudUpload(microsoftAuth)
-  setInterval(() => void shortFormJobRunner(), 60_000)
 })

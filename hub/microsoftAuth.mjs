@@ -327,12 +327,18 @@ export function createMicrosoftAuth(configInput) {
     clientId: configInput.clientId ?? '',
     clientSecret: configInput.clientSecret ?? '',
     scopes: Array.isArray(configInput.scopes) ? configInput.scopes : [],
-    tokenFilePath: configInput.tokenFilePath
+    tokenFilePath: configInput.tokenFilePath,
+    driveUser: configInput.driveUser ?? null,
+    useClientCredentials: Boolean(configInput.useClientCredentials)
   }
 
   config.redirectUri = `${config.publicUrl}/api/auth/microsoft/callback`
   config.authorizeEndpoint = `https://login.microsoftonline.com/${config.tenantId}/oauth2/v2.0/authorize`
   config.tokenEndpoint = `https://login.microsoftonline.com/${config.tenantId}/oauth2/v2.0/token`
+
+  // In-memory cache for client credentials token (no file needed)
+  let _ccAccessToken = null
+  let _ccExpiresAt = 0
 
   function getConfigSummary() {
     return {
@@ -428,6 +434,23 @@ export function createMicrosoftAuth(configInput) {
       throw new Error('Microsoft auth is not configured: missing OPERATOR_HUB_MS_CLIENT_ID')
     }
 
+    // Client credentials flow — no user interaction, token auto-renews forever
+    if (config.useClientCredentials && config.clientSecret) {
+      if (_ccAccessToken && Date.now() < _ccExpiresAt - 60_000) {
+        return _ccAccessToken
+      }
+      const tokenResponse = await postTokenRequest(config, {
+        client_id: config.clientId,
+        client_secret: config.clientSecret,
+        grant_type: 'client_credentials',
+        scope: 'https://graph.microsoft.com/.default'
+      })
+      _ccAccessToken = tokenResponse.access_token
+      _ccExpiresAt = Date.now() + Number(tokenResponse.expires_in ?? 3600) * 1000
+      return _ccAccessToken
+    }
+
+    // Delegated flow (user token + refresh token)
     const storedToken = await readTokenFile(config.tokenFilePath)
     if (!storedToken) {
       throw new Error('No Microsoft auth token found. Start sign-in at /api/auth/microsoft/start')
@@ -454,6 +477,11 @@ export function createMicrosoftAuth(configInput) {
     const refreshedToken = buildStoredToken(config, tokenResponse, storedToken)
     await writeTokenFile(config.tokenFilePath, refreshedToken)
     return refreshedToken.accessToken
+  }
+
+  function driveRootPath() {
+    if (config.driveUser) return `/users/${encodeURIComponent(config.driveUser)}/drive`
+    return '/me/drive'
   }
 
   async function getProfile() {
@@ -976,6 +1004,7 @@ export function createMicrosoftAuth(configInput) {
     getAuthorizationUrl,
     exchangeAuthorizationCode,
     ensureAccessToken,
+    driveRootPath,
     getProfile,
     listCalendarEvents,
     createCalendarEvent,

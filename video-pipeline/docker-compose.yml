@@ -1,0 +1,74 @@
+services:
+  pipeline:
+    profiles:
+      - legacy-disabled
+    build:
+      context: ..
+      dockerfile: video-pipeline/Dockerfile
+    container_name: video-pipeline
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      PORT: "3420"
+      OPERATOR_HUB_REPO_ROOT: /app
+      OPERATOR_HUB_SHORT_FORM_ROOT: /workspace/pipeline-state
+      MS_TOKEN_FILE: /workspace/pipeline-state/microsoft-auth.json
+      BGREMOVER_URL: http://video-pipeline-bgremover:8095
+      BG_WATCH_OUTPUT: /workspace/short-form-input
+      BG_WATCH_INPUT: /workspace/bg-input
+      SOCIAL_COPY_API_URL: http://video-pipeline-social-copy-api:3410
+      OPERATOR_HUB_SHORT_FORM_MUSIC_PATH: /workspace/material-auto-clipp/music/Adventure.mp3
+      OPERATOR_HUB_SHORT_FORM_SFX_DIR: /workspace/material-auto-clipp
+      OPERATOR_HUB_SHORT_FORM_REVIEW_OUTPUT_DIR: /workspace/short-form-review-cuts
+    ports:
+      - "3420:3420"
+    volumes:
+      - ${PIPELINE_STATE_DIR:-./data/pipeline-state}:/workspace/pipeline-state
+      - ${VIDEO_AUTOMATION_RAW_DIR:-C:/Users/sebas/Ugglebo Invest AB/SebCastwall - Dokument/04 Interna verktyg/video-automation/raw-videos}:/workspace/bg-input
+      - ${VIDEO_AUTOMATION_NOBG_DIR:-C:/Users/sebas/Ugglebo Invest AB/SebCastwall - Dokument/04 Interna verktyg/video-automation/no-bg-videos}:/workspace/short-form-input
+      - ${VIDEO_AUTOMATION_REVIEW_DIR:-C:/Users/sebas/Ugglebo Invest AB/SebCastwall - Dokument/04 Interna verktyg/video-automation/short-form-review-cuts}:/workspace/short-form-review-cuts
+      - ${VIDEO_AUTOMATION_MATERIAL_DIR:-C:/Users/sebas/Ugglebo Invest AB/SebCastwall - Dokument/04 Interna verktyg/video-automation/material-auto-clipp}:/workspace/material-auto-clipp
+    depends_on:
+      - bgremover
+      - social-copy-api
+    networks:
+      - services-net
+
+  social-copy-api:
+    profiles:
+      - legacy-disabled
+    build:
+      context: ../workers/social-copy-api
+    container_name: video-pipeline-social-copy-api
+    env_file:
+      - ../.env
+    restart: unless-stopped
+    environment:
+      SOCIAL_COPY_MODEL: ${SOCIAL_COPY_MODEL:-gpt-5.4-mini}
+      PORT: "3410"
+    networks:
+      - services-net
+
+  bgremover:
+    profiles:
+      - legacy-disabled
+    build:
+      context: ../../bg-remover
+      dockerfile: Dockerfile.server
+    container_name: video-pipeline-bgremover
+    restart: unless-stopped
+    environment:
+      BGR_OUTPUT_DIR: /output
+      BGR_INPUT_DIR: /input
+      BGR_PORT: "8095"
+    volumes:
+      - ${VIDEO_AUTOMATION_RAW_DIR:-C:/Users/sebas/Ugglebo Invest AB/SebCastwall - Dokument/04 Interna verktyg/video-automation/raw-videos}:/input
+      - ${VIDEO_AUTOMATION_NOBG_DIR:-C:/Users/sebas/Ugglebo Invest AB/SebCastwall - Dokument/04 Interna verktyg/video-automation/no-bg-videos}:/output
+      - ${U2NET_HOME_HOST_DIR:-./data/u2net}:/root/.u2net
+    networks:
+      - services-net
+
+networks:
+  services-net:
+    external: true

@@ -13,7 +13,7 @@ const workerDir = path.resolve(repoRoot, 'workers/search-demand-capture')
 
 const DEFAULT_SOURCES = ['google_keyword_planner', 'google_trends']
 const ALLOWED_SOURCES = new Set(DEFAULT_SOURCES)
-const MAX_SEED_QUERIES = 20
+const MAX_SEED_QUERIES = 100
 const MAX_QUERY_LENGTH = 120
 const KEYWORD_PLANNER_BATCH_SIZE = 8
 const DEFAULT_WIDTH = 1440

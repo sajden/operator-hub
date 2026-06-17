@@ -7,7 +7,9 @@ import { spawn } from 'node:child_process'
 
 const VIDEO_EXTS = new Set(['.mp4', '.mov', '.webm', '.m4v'])
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const repoRoot = path.resolve(__dirname, '..')
+const repoRoot = process.env.OPERATOR_HUB_REPO_ROOT
+  ? path.resolve(process.env.OPERATOR_HUB_REPO_ROOT)
+  : path.resolve(__dirname, '..')
 const SHORT_FORM_ROOT = process.env.OPERATOR_HUB_SHORT_FORM_ROOT?.trim()
   ? path.resolve(process.env.OPERATOR_HUB_SHORT_FORM_ROOT.trim())
   : path.resolve(repoRoot, '.local/short-form-video')
@@ -35,8 +37,10 @@ const PROXY_VIDEO_BITRATE = process.env.OPERATOR_HUB_SHORT_FORM_PROXY_VIDEO_BITR
 const PROXY_AUDIO_BITRATE = process.env.OPERATOR_HUB_SHORT_FORM_PROXY_AUDIO_BITRATE ?? '128k'
 const FFMPEG_THREADS = Math.max(1, Number(process.env.OPERATOR_HUB_SHORT_FORM_FFMPEG_THREADS ?? '2'))
 const WHISPER_THREADS = Math.max(1, Number(process.env.OPERATOR_HUB_SHORT_FORM_WHISPER_THREADS ?? '2'))
+const TRANSCRIBE_MODEL = process.env.OPERATOR_HUB_SHORT_FORM_TRANSCRIBE_MODEL ?? 'whisper-1'
 const NICE_LEVEL = Number(process.env.OPERATOR_HUB_SHORT_FORM_NICE_LEVEL ?? '10')
-const KEEP_RECENT_JOBS = Math.max(0, Number(process.env.OPERATOR_HUB_SHORT_FORM_KEEP_RECENT_JOBS ?? '50'))
+const KEEP_RECENT_JOBS = Math.max(0, Number(process.env.OPERATOR_HUB_SHORT_FORM_KEEP_RECENT_JOBS ?? '5'))
+const REVIEW_OUTPUT_DIR = process.env.OPERATOR_HUB_SHORT_FORM_REVIEW_OUTPUT_DIR ?? '/workspace/short-form-review-cuts'
 const ARTICLE_VIEWPORT_WIDTH = Number(process.env.OPERATOR_HUB_SHORT_FORM_ARTICLE_VIEWPORT_WIDTH ?? '430')
 const ARTICLE_VIEWPORT_HEIGHT = Number(process.env.OPERATOR_HUB_SHORT_FORM_ARTICLE_VIEWPORT_HEIGHT ?? '932')
 const ARTICLE_SCREENSHOT_PATH = (() => {
@@ -77,6 +81,58 @@ async function removePathIfExists(targetPath) {
   await rm(targetPath, { recursive: true, force: true }).catch(() => {})
 }
 
+function sourceOutputSlug(job) {
+  const sourcePath = String(job?.source?.sourcePath ?? '').trim()
+  const sourceBase = sourcePath ? path.basename(sourcePath) : ''
+  return slugify(sourceBase || job?.source?.label || job?.title || job?.id || 'short-form') || 'short-form'
+}
+
+function reviewOutputFileName(job) {
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '-')
+  return `${sourceOutputSlug(job)}-${stamp}.mp4`
+}
+
+function socialPostsToMarkdown(posts, transcript = '') {
+  const lines = ['# Social copy', '']
+  if (posts?.tikTokInstagramCaption) lines.push('## TikTok / Instagram', '', String(posts.tikTokInstagramCaption).trim(), '')
+  if (posts?.youTubeShortsTitle) lines.push('## YouTube Shorts title', '', String(posts.youTubeShortsTitle).trim(), '')
+  if (posts?.youTubeShortsDescription) lines.push('## YouTube Shorts description', '', String(posts.youTubeShortsDescription).trim(), '')
+  if (posts?.linkedInPost) lines.push('## LinkedIn', '', String(posts.linkedInPost).trim(), '')
+  if (Array.isArray(posts?.hashtags) && posts.hashtags.length > 0) lines.push('## Hashtags', '', posts.hashtags.join(' '), '')
+  if (transcript) lines.push('## Transcript', '', transcript.trim(), '')
+  return `${lines.join('\n').trim()}\n`
+}
+
+async function readCombinedTranscript(job) {
+  const transcriptPath = job?.paths?.combinedTranscriptPath
+    ? path.resolve(jobDir(job.id), job.paths.combinedTranscriptPath)
+    : path.resolve(jobDir(job.id), 'transcripts', 'full-transcript.json')
+  const transcript = await readJsonIfExists(transcriptPath, null)
+  return String(transcript?.fullText ?? '').trim()
+}
+
+async function publishReviewCut(job, reviewCutPath) {
+  if (!REVIEW_OUTPUT_DIR || !existsSync(reviewCutPath)) return null
+  const outputDir = path.resolve(REVIEW_OUTPUT_DIR, sourceOutputSlug(job))
+  await ensureDir(outputDir)
+
+  const outputPath = path.resolve(outputDir, reviewOutputFileName(job))
+  await copyFile(reviewCutPath, outputPath)
+
+  const metadataDir = path.resolve(jobDir(job.id), 'metadata')
+  const socialCopyPath = path.resolve(metadataDir, 'social-copy.md')
+  const outputMdPath = path.resolve(outputDir, `${path.basename(outputPath, path.extname(outputPath))}.md`)
+
+  if (existsSync(socialCopyPath)) {
+    await copyFile(socialCopyPath, outputMdPath)
+  } else {
+    const posts = await readJsonIfExists(path.resolve(metadataDir, 'social-posts.json'), null)
+    const transcript = await readCombinedTranscript(job)
+    await writeFile(outputMdPath, socialPostsToMarkdown(posts, transcript), 'utf-8')
+  }
+
+  return outputPath
+}
 async function readJsonIfExists(filePath, fallback) {
   try {
     return JSON.parse(await readFile(filePath, 'utf-8'))
@@ -528,206 +584,108 @@ async function readScriptIfPresent(job) {
 }
 
 async function captureArticleScreenshot(articleUrl, outputPath) {
-  const script = `
-from pathlib import Path
-from playwright.sync_api import sync_playwright
-import sys
+  await ensureDir(path.dirname(outputPath))
+  const { chromium } = await import('playwright-core')
+  const browser = await chromium.launch({
+    headless: true,
+    executablePath: ARTICLE_SCREENSHOT_PATH,
+    args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-notifications']
+  })
 
-url = sys.argv[1]
-output_path = Path(sys.argv[2])
-output_path.parent.mkdir(parents=True, exist_ok=True)
+  try {
+    const context = await browser.newContext({
+      viewport: { width: ARTICLE_VIEWPORT_WIDTH, height: ARTICLE_VIEWPORT_HEIGHT },
+      deviceScaleFactor: 2,
+      isMobile: true,
+      userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
+    })
+    const page = await context.newPage()
 
-with sync_playwright() as p:
-    browser = p.chromium.launch(headless=True, executable_path='${ARTICLE_SCREENSHOT_PATH}')
-    context = browser.new_context(
-        viewport={'width': ${ARTICLE_VIEWPORT_WIDTH}, 'height': ${ARTICLE_VIEWPORT_HEIGHT}},
-        device_scale_factor=2,
-        is_mobile=True,
-        user_agent='Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
-    )
-    page = context.new_page()
+    const blockedPatterns = [
+      '**/*cookielaw*', '**/*onetrust*', '**/*cookiebot*', '**/*didomi*', '**/*usercentrics*',
+      '**/*consentmanager*', '**/*sourcepoint*', '**/*sp-prod.net*', '**/*cmp*',
+      '**/*doubleclick.net*', '**/*googlesyndication.com*', '**/*googletagservices.com*',
+      '**/*pubmatic.com*', '**/*rubiconproject.com*', '**/*openx.net*', '**/*adnxs.com*',
+      '**/*taboola.com*', '**/*outbrain.com*', '**/*criteo.com*', '**/*prebid.*'
+    ]
+    for (const pattern of blockedPatterns) {
+      await page.route(pattern, (route) => route.abort()).catch(() => {})
+    }
 
-    # Block CMP/consent scripts and ad networks before they load
-    def block_request(route):
-        route.abort()
-    for pattern in [
-        # Consent managers
-        '**/*cookielaw*', '**/*onetrust*', '**/*cookiebot*',
-        '**/*didomi*', '**/*privacy-mgmt*', '**/*usercentrics*',
-        '**/*consentmanager*', '**/*trustarc*', '**/*evidon*',
-        '**/*gdprtools*', '**/*cookiepro*', '**/*cookie-script*',
-        '**/*consent.js*', '**/*cookieconsent*',
-        '**/*sourcepoint*', '**/*sp-prod.net*', '**/*cmp.omni*',
-        # Ad networks
-        '**/*doubleclick.net*', '**/*googlesyndication.com*',
-        '**/*googletagservices.com*',
-        '**/*pubmatic.com*', '**/*rubiconproject.com*',
-        '**/*openx.net*', '**/*appnexus.com*', '**/*adnxs.com*',
-        '**/*taboola.com*', '**/*outbrain.com*',
-        '**/*criteo.com*', '**/*criteo.net*',
-        '**/*amazon-adsystem.com*', '**/*media.net*',
-        '**/*adform.net*', '**/*smartadserver.com*',
-        '**/*indexexchange.com*', '**/*sharethrough.com*',
-        '**/*triplelift.com*', '**/*sovrn.com*',
-        '**/*prebid.*'
-    ]:
-        try:
-            page.route(pattern, block_request)
-        except Exception:
-            pass
-
-    # Inject CSS to hide ad placeholders that survive network blocking
-    page.add_init_script("""
-      const style = document.createElement('style')
-      style.textContent = \`
-        [class*="ad-slot"], [class*="AdSlot"], [class*="ad_slot"],
-        [class*="advert"], [class*="Advert"], [id*="advert"],
-        [class*="dfp-"], [id*="dfp-"], [data-dfp],
-        [class*="gpt-ad"], [id*="gpt-"],
-        .taboola-ad, .outbrain-widget,
-        [class*="sponsored"], [class*="Sponsored"],
-        ins.adsbygoogle { display: none !important; }
-      \`
-      document.head ? document.head.appendChild(style) : document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style))
-    """)
-
-    page.add_init_script("""
+    await page.addInitScript(() => {
       try {
-        // Pre-fill all common consent flags
-        for (const k of ['cookieConsent','gdpr_consent','cookie_consent','CookieConsent','consentGranted','euconsent-v2']) {
-          localStorage.setItem(k, '1')
+        for (const key of ['cookieConsent', 'gdpr_consent', 'cookie_consent', 'CookieConsent', 'consentGranted', 'euconsent-v2']) {
+          localStorage.setItem(key, '1')
         }
         document.cookie = 'CookieConsent=true;path=/'
         document.cookie = 'cookieconsent_status=dismiss;path=/'
         document.cookie = 'gdpr=1;path=/'
-        // Fake TCF v2 API
-        window.__tcfapi = function(cmd, ver, cb) {
-          if (typeof cb === 'function') cb({
-            gdprApplies: false, tcString: '', cmpStatus: 'loaded',
-            eventStatus: 'useractioncomplete',
-            purpose: {consents: {}, legitimateInterests: {}},
-            vendor: {consents: {}, legitimateInterests: {}}
-          }, true)
+        window.__tcfapi = (_cmd, _ver, cb) => {
+          if (typeof cb === 'function') cb({ gdprApplies: false, tcString: '', cmpStatus: 'loaded', eventStatus: 'useractioncomplete' }, true)
         }
-        window.__cmp = function(cmd, arg, cb) { if (typeof cb === 'function') cb(null, true) }
-      } catch(e) {}
-    """)
+        window.__cmp = (_cmd, _arg, cb) => { if (typeof cb === 'function') cb(null, true) }
+      } catch (_) {}
+    })
 
-    page.set_default_timeout(8000)
-    page.set_default_navigation_timeout(20000)
-    page.goto(url, wait_until='domcontentloaded', timeout=20000)
-    page.wait_for_timeout(4000)
+    await page.goto(articleUrl, { waitUntil: 'domcontentloaded', timeout: 20000 })
+    await page.waitForTimeout(2500)
+    await page.keyboard.press('Escape').catch(() => {})
 
-    # Try pressing Escape — dismisses some dialogs
-    try:
-        page.keyboard.press('Escape')
-        page.wait_for_timeout(300)
-    except Exception:
-        pass
-
-    # Try clicking accept buttons across all frames
-    labels = [
-        'Acceptera', 'Godkänn', 'Godkänn alla', 'Accept', 'Accept all',
-        'Tillåt alla', 'Allow all', 'Jag förstår', 'I understand',
-        'OK', 'Okej', 'Ja, jag accepterar', 'Acceptera alla',
-        'Tillåt alla cookies', 'Godkänn alla cookies', 'Spara inställningar'
+    const labels = [
+      'Acceptera', 'Godkänn', 'Godkänn alla', 'Accept', 'Accept all', 'Tillåt alla', 'Allow all',
+      'Jag förstår', 'I understand', 'OK', 'Okej', 'Ja, jag accepterar', 'Acceptera alla',
+      'Tillåt alla cookies', 'Godkänn alla cookies', 'Spara inställningar'
     ]
-    for frame in list(page.frames):
-        for label in labels:
-            try:
-                frame.get_by_role('button', name=label, exact=False).click(timeout=800, force=True)
-                page.wait_for_timeout(600)
-                break
-            except Exception:
-                pass
-
-    def remove_overlays():
-        page.evaluate("""
-          () => {
-            // Remove known CMP containers by hard selectors
-            const hard = [
-              '#onetrust-banner-sdk','#onetrust-consent-sdk','.onetrust-pc-dark-filter',
-              '.qc-cmp2-container','.qc-cmp2-ui-container','.fc-dialog-container','.fc-consent-root',
-              '[class*="CookieBanner"]','[class*="cookie-banner"]','[class*="cookiebanner"]',
-              '[class*="CookieConsent"]','[id*="cookieBanner"]','[id*="cookie-banner"]',
-              '[id*="cookieConsent"]','[aria-label*="cookie" i]','[id*="consent" i]',
-              '[class*="consent-banner" i]','[class*="consent-overlay" i]',
-              '[id*="gdpr"]','[class*="gdpr" i]',
-              '[class*="ConsentWall"]','[class*="consent-wall" i]',
-              '[data-testid*="cookie"]','[data-testid*="consent"]',
-              '[id^="sp_message_container"]','[id^="sp_message"]','.sp_message-overlay',
-              'div[class*="sp-message"]','iframe[src*="sourcepoint"]'
-            ]
-            for (const sel of hard) {
-              try { for (const n of document.querySelectorAll(sel)) n.remove() } catch(e) {}
-            }
-            // Remove ad placeholder elements (inline in DOM, not fixed/sticky)
-            const adSelectors = [
-              '[class*="ad-slot"]','[class*="AdSlot"]','[class*="ad_slot"]',
-              '[class*="advert" i]','[id*="advert" i]',
-              '[class*="dfp-"]','[id*="dfp-"]','[data-dfp]',
-              '[class*="gpt-ad"]','[id*="gpt-"]',
-              '[class*="Ad__"]','[class*="__ad"]','[class*="-ad-"]',
-              'ins.adsbygoogle','[class*="taboola"]','[class*="outbrain"]',
-              '[class*="sponsored" i]','[data-ad]','[data-ad-slot]',
-              '[class*="annons" i]','[id*="annons" i]',
-              '[class*="banner" i][class*="ad" i]'
-            ]
-            for (const sel of adSelectors) {
-              try { for (const n of document.querySelectorAll(sel)) n.remove() } catch(e) {}
-            }
-            // Remove any element whose sole visible text is "Annons" / "Reklam"
-            for (const el of [...document.querySelectorAll('div,aside,section,figure')]) {
-              try {
-                const t = el.textContent.trim()
-                if (t === 'Annons' || t === 'Reklam' || t === 'Advertisement') el.remove()
-              } catch(e) {}
-            }
-            // Aggressively remove ANY large fixed/sticky element covering the viewport
-            const W = window.innerWidth, H = window.innerHeight
-            for (const el of [...document.querySelectorAll('body *')]) {
-              try {
-                const s = window.getComputedStyle(el)
-                if (s.display === 'none' || s.visibility === 'hidden') continue
-                const z = parseInt(s.zIndex) || 0
-                const r = el.getBoundingClientRect()
-                const big = r.width > W * 0.4 && r.height > 60
-                const fixed = s.position === 'fixed' || s.position === 'sticky'
-                if (fixed && big && z >= 0) { el.remove(); continue }
-                // Also remove full-screen dimming overlays (z-index > 100, covers most of screen)
-                if (fixed && r.width > W * 0.8 && r.height > H * 0.8) { el.remove() }
-              } catch(e) {}
-            }
-            // Unlock scroll
-            document.body.style.setProperty('overflow', 'auto', 'important')
-            document.body.style.setProperty('position', 'static', 'important')
-            document.documentElement.style.setProperty('overflow', 'auto', 'important')
-          }
-        """)
-
-    remove_overlays()
-    page.wait_for_timeout(800)
-    remove_overlays()
-
-    # Trigger lazy-load by briefly scrolling down, then snap back to top
-    page.evaluate("window.scrollTo(0, 320)")
-    page.wait_for_timeout(800)
-    remove_overlays()
-    page.evaluate("window.scrollTo(0, 0)")
-    page.wait_for_timeout(400)
-
-    page.screenshot(path=str(output_path), full_page=False)
-    browser.close()
-print(output_path)
-`
-
-  await runCommand('python3', ['-c', script, articleUrl, outputPath], {
-    env: {
-      PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH ?? '0'
+    for (const frame of page.frames()) {
+      for (const label of labels) {
+        const clicked = await frame.getByRole('button', { name: label, exact: false }).click({ timeout: 600, force: true }).then(() => true).catch(() => false)
+        if (clicked) break
+      }
     }
-  })
-}
 
+    const cleanupOverlays = async () => {
+      await page.evaluate(() => {
+        const selectors = [
+          '#onetrust-banner-sdk', '#onetrust-consent-sdk', '.onetrust-pc-dark-filter',
+          '.qc-cmp2-container', '.qc-cmp2-ui-container', '.fc-dialog-container', '.fc-consent-root',
+          '[class*="CookieBanner"]', '[class*="cookie-banner"]', '[class*="cookiebanner"]',
+          '[class*="CookieConsent"]', '[id*="cookieBanner"]', '[id*="cookieConsent"]',
+          '[aria-label*="cookie" i]', '[id*="consent" i]', '[class*="consent" i]', '[id*="gdpr" i]',
+          '[id^="sp_message_container"]', '[id^="sp_message"]', '.sp_message-overlay', 'iframe[src*="sourcepoint"]',
+          '[class*="ad-slot" i]', '[class*="advert" i]', '[id*="advert" i]', '[class*="sponsored" i]',
+          '[class*="annons" i]', '[id*="annons" i]', 'ins.adsbygoogle'
+        ]
+        for (const selector of selectors) {
+          try { document.querySelectorAll(selector).forEach((node) => node.remove()) } catch (_) {}
+        }
+        const width = window.innerWidth
+        const height = window.innerHeight
+        for (const el of [...document.querySelectorAll('body *')]) {
+          try {
+            const style = window.getComputedStyle(el)
+            const rect = el.getBoundingClientRect()
+            const fixed = style.position === 'fixed' || style.position === 'sticky'
+            if (fixed && rect.width > width * 0.4 && rect.height > 50) el.remove()
+            if (fixed && rect.width > width * 0.8 && rect.height > height * 0.5) el.remove()
+          } catch (_) {}
+        }
+        document.body.style.setProperty('overflow', 'auto', 'important')
+        document.documentElement.style.setProperty('overflow', 'auto', 'important')
+      }).catch(() => {})
+    }
+
+    await cleanupOverlays()
+    await page.waitForTimeout(500)
+    await cleanupOverlays()
+    await page.evaluate(() => window.scrollTo(0, 100)).catch(() => {})
+    await page.waitForTimeout(500)
+    await cleanupOverlays()
+    await page.screenshot({ path: outputPath, fullPage: false })
+    await context.close()
+  } finally {
+    await browser.close().catch(() => {})
+  }
+}
 function parseScriptBeats(scriptText) {
   const lines = String(scriptText ?? '')
     .replace(/\r\n/g, '\n')
@@ -914,39 +872,91 @@ async function compositeSpeakerOverArticle(articleImagePath, speakerPath, output
   ])
 }
 
+async function synthesizeTranscriptTiming(filePath, transcript) {
+  const text = String(transcript?.text ?? '').replace(/\s+/g, ' ').trim()
+  if (!text) return transcript
+  const hasWords = Array.isArray(transcript?.words) && transcript.words.length > 0
+  const hasSegmentWords = Array.isArray(transcript?.segments) && transcript.segments.some((segment) => Array.isArray(segment?.words) && segment.words.length > 0)
+  if (hasWords || hasSegmentWords) return transcript
+
+  const probe = await ffprobeJson(filePath).catch(() => null)
+  const duration = Math.max(0.5, Number(probe?.format?.duration ?? 0))
+  const tokens = text.split(/\s+/).filter(Boolean)
+  if (tokens.length === 0) return transcript
+  const slice = duration / tokens.length
+  const words = tokens.map((word, index) => ({
+    word,
+    start: Number((slice * index).toFixed(3)),
+    end: Number((slice * (index + 1)).toFixed(3))
+  }))
+  return {
+    ...transcript,
+    segments: [{ id: 0, start: 0, end: Number(duration.toFixed(3)), text, words }],
+    words
+  }
+}
 async function transcribeClipAudio(filePath, transcriptsDir) {
   await ensureDir(transcriptsDir)
-  await runCommand('nice', [
-    '-n',
-    String(NICE_LEVEL),
-    'python3',
-    '-m',
-    'whisper',
-    filePath,
-    '--model', WHISPER_MODEL,
-    '--device', 'cpu',
-    '--language', WHISPER_LANGUAGE,
-    '--task', 'transcribe',
-    '--output_dir', transcriptsDir,
-    '--output_format', 'json',
-    '--word_timestamps', 'True',
-    '--verbose', 'False',
-    '--fp16', 'False',
-    '--condition_on_previous_text', 'False',
-    '--threads', String(WHISPER_THREADS)
-  ], {
-    env: {
-      OMP_NUM_THREADS: String(WHISPER_THREADS),
-      MKL_NUM_THREADS: String(WHISPER_THREADS),
-      OPENBLAS_NUM_THREADS: String(WHISPER_THREADS),
-      NUMEXPR_NUM_THREADS: String(WHISPER_THREADS)
-    }
-  })
-
   const jsonPath = path.resolve(transcriptsDir, `${path.basename(filePath, path.extname(filePath))}.json`)
-  return readJsonIfExists(jsonPath, null)
-}
 
+  try {
+    await runCommand('nice', [
+      '-n',
+      String(NICE_LEVEL),
+      'python3',
+      '-m',
+      'whisper',
+      filePath,
+      '--model', WHISPER_MODEL,
+      '--device', 'cpu',
+      '--language', WHISPER_LANGUAGE,
+      '--task', 'transcribe',
+      '--output_dir', transcriptsDir,
+      '--output_format', 'json',
+      '--word_timestamps', 'True',
+      '--verbose', 'False',
+      '--fp16', 'False',
+      '--condition_on_previous_text', 'False',
+      '--threads', String(WHISPER_THREADS)
+    ], {
+      env: {
+        OMP_NUM_THREADS: String(WHISPER_THREADS),
+        MKL_NUM_THREADS: String(WHISPER_THREADS),
+        OPENBLAS_NUM_THREADS: String(WHISPER_THREADS),
+        NUMEXPR_NUM_THREADS: String(WHISPER_THREADS)
+      }
+    })
+
+    return readJsonIfExists(jsonPath, null)
+  } catch (whisperError) {
+    if (process.env.OPERATOR_HUB_SHORT_FORM_DISABLE_TRANSCRIBE_FALLBACK === '1' || !process.env.OPENAI_API_KEY) {
+      throw whisperError
+    }
+
+    const audioBuffer = await readFile(filePath)
+    const form = new FormData()
+    form.append('file', new Blob([audioBuffer], { type: 'video/mp4' }), path.basename(filePath))
+    form.append('model', TRANSCRIBE_MODEL)
+    form.append('language', WHISPER_LANGUAGE)
+    form.append('response_format', 'verbose_json')
+    form.append('timestamp_granularities[]', 'word')
+
+    const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+      body: form
+    })
+
+    if (!response.ok) {
+      const message = await response.text().catch(() => '')
+      throw new Error(`Local Whisper failed and OpenAI transcription failed: HTTP ${response.status}${message ? ` ${message.slice(0, 240)}` : ''}`)
+    }
+
+    const transcript = await synthesizeTranscriptTiming(filePath, await response.json())
+    await writeFile(jsonPath, `${JSON.stringify(transcript, null, 2)}\n`, 'utf-8')
+    return transcript
+  }
+}
 function transcriptWordsFromWhisper(whisperJson) {
   const segments = Array.isArray(whisperJson?.segments) ? whisperJson.segments : []
   const words = []
@@ -1118,95 +1128,18 @@ function buildWholeClipSegment(clip, transcript, segmentIndex) {
 }
 
 function selectTranscriptSegments(clips, transcriptRecords) {
-  if (looksLikeWholeClipFlow(clips, transcriptRecords)) {
-    const keptSegments = clips
-      .filter((clip) => clip.kept)
-      .map((clip, index) => {
-        const transcript = transcriptRecords.find((record) => record.clipIndex === clip.index)
-        return buildWholeClipSegment(clip, transcript, index)
-      })
-      .filter(Boolean)
-
-    return {
-      mode: 'whole_clips',
-      allSegments: keptSegments,
-      keptSegments
-    }
-  }
-
-  const allSegments = []
-  for (const clip of clips) {
-    if (!clip.kept) continue
-    const transcript = transcriptRecords.find((record) => record.clipIndex === clip.index)
-    const segments = splitTranscriptIntoSegments(clip, transcript)
-    segments.forEach((segment, index) => {
-      const { score, reasons } = scoreSegment(segment, {
-        isEarly: clip.index <= 1 && index === 0,
-        isLate: clip.index >= Math.max(0, clips.length - 2)
-      })
-      allSegments.push({
-        ...segment,
-        segmentIndex: index,
-        score,
-        reasons,
-        keep: true,
-        dropReason: null
-      })
+  const keptSegments = clips
+    .filter((clip) => clip.kept)
+    .map((clip, index) => {
+      const transcript = transcriptRecords.find((record) => record.clipIndex === clip.index)
+      return buildWholeClipSegment(clip, transcript, index)
     })
-  }
-
-  for (let i = 0; i < allSegments.length; i += 1) {
-    const left = allSegments[i]
-    if (!left.keep) continue
-    for (let j = i + 1; j < allSegments.length; j += 1) {
-      const right = allSegments[j]
-      if (!right.keep) continue
-      const similarity = jaccardSimilarity(left.text, right.text)
-      if (similarity < 0.72) continue
-      const better =
-        left.score > right.score ? left :
-        right.score > left.score ? right :
-        tokenize(left.text).length >= tokenize(right.text).length ? left : right
-      const worse = better === left ? right : left
-      worse.keep = false
-      worse.dropReason = `duplicate_of_${better.clipIndex}_${better.segmentIndex}`
-    }
-  }
-
-  let keptSegments = allSegments.filter((segment) => segment.keep && segment.score >= 0.9)
-  if (keptSegments.length === 0) {
-    keptSegments = allSegments
-      .filter((segment) => segment.keep)
-      .sort((left, right) => right.score - left.score)
-      .slice(0, 3)
-      .sort((left, right) => left.clipIndex - right.clipIndex || left.start - right.start)
-  }
-
-  let totalDuration = keptSegments.reduce((sum, segment) => sum + (segment.end - segment.start), 0)
-  if (totalDuration > TARGET_MAX_SECONDS) {
-    const protectedIds = new Set()
-    const first = keptSegments[0]
-    const lastQuestion = [...keptSegments].reverse().find((segment) => /[?]/.test(segment.text))
-    if (first) protectedIds.add(`${first.clipIndex}:${first.segmentIndex}`)
-    if (lastQuestion) protectedIds.add(`${lastQuestion.clipIndex}:${lastQuestion.segmentIndex}`)
-
-    const droppable = [...keptSegments]
-      .filter((segment) => !protectedIds.has(`${segment.clipIndex}:${segment.segmentIndex}`))
-      .sort((left, right) => left.score - right.score)
-
-    for (const segment of droppable) {
-      if (totalDuration <= TARGET_MAX_SECONDS) break
-      segment.keep = false
-      segment.dropReason = 'dropped_for_runtime'
-      totalDuration -= segment.end - segment.start
-    }
-
-    keptSegments = keptSegments.filter((segment) => segment.keep)
-  }
+    .filter(Boolean)
 
   return {
-    allSegments,
-    keptSegments: keptSegments.sort((left, right) => left.clipIndex - right.clipIndex || left.start - right.start)
+    mode: 'whole_clips',
+    allSegments: keptSegments,
+    keptSegments
   }
 }
 
@@ -2176,15 +2109,13 @@ export async function renderShortFormJob(jobId) {
       Number(clip.sourceStartSeconds ?? 0),
       Number(clip.sourceEndSeconds ?? 0)
     )
-    // Convert first clip to WebM/VP9 with alpha for Remotion (Chromium can decode VP9 alpha, not ProRes)
     if (index === 0) {
-      const splashH264Path = path.resolve(rendersDir, 'splash-speaker-nobg.mp4')
+      const splashSpeakerPath = path.resolve(rendersDir, 'splash-speaker-nobg.webm')
       await runCommand('ffmpeg', [
         '-y', '-hide_banner', '-i', baseSegmentPath,
         '-c:v', 'libvpx-vp9', '-crf', '30', '-b:v', '0',
-        '-pix_fmt', 'yuva420p', '-r', '30',
-        '-an',
-        splashH264Path.replace('.mp4', '.webm')
+        '-pix_fmt', 'yuva420p', '-r', '30', '-an',
+        splashSpeakerPath
       ], { logPath: renderLogPath }).catch(() => {})
     }
     const hasArticle = articleBackgroundPath && existsSync(articleBackgroundPath)
@@ -2274,14 +2205,10 @@ export async function renderShortFormJob(jobId) {
     const clip1Duration = Number(clip1?.durationSeconds ?? 0)
     const clip1Frames = Math.max(30, Math.round(clip1Duration * 30))
 
-    // No-bg speaker video for splash intro — use WebM/VP9 with alpha (Chromium can't decode ProRes alpha)
-    const splashWebmPath = path.resolve(rendersDir, 'splash-speaker-nobg.webm')
-    const splashNoBlgPath = path.resolve(rendersDir, 'splash-speaker-nobg.mov')
-    const clip1VideoPath = existsSync(splashWebmPath)
-      ? splashWebmPath
-      : existsSync(splashNoBlgPath)
-        ? splashNoBlgPath
-        : path.resolve(renderSegmentsDir, 'segment-000-composited.mp4')
+    const splashSpeakerPath = path.resolve(rendersDir, 'splash-speaker-nobg.webm')
+    const clip1VideoPath = existsSync(splashSpeakerPath)
+      ? splashSpeakerPath
+      : path.resolve(renderSegmentsDir, 'segment-000-composited.mp4')
 
     // Headline from first clip transcript
     const firstText = String(clip1?.text ?? '').trim()
@@ -2431,12 +2358,15 @@ export async function renderShortFormJob(jobId) {
     }
   }
 
+  const publishedReviewCutPath = await publishReviewCut(job, reviewCutPath)
   setStepDone(job, 'render', 'Rendered review cut', {
-    reviewCutPath: relativeToJob(job.id, reviewCutPath)
+    reviewCutPath: relativeToJob(job.id, reviewCutPath),
+    publishedReviewCutPath
   })
   await removePathIfExists(renderSegmentsDir)
   await removePathIfExists(concatListPath)
   job.paths.reviewCutPath = reviewCutPath
+  job.paths.publishedReviewCutPath = publishedReviewCutPath
   job.summary.rendered = true
   job.status = 'done'
   await saveJob(job)

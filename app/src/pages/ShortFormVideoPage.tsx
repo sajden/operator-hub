@@ -349,18 +349,41 @@ export default function ShortFormVideoPage({ onNavigate, theme, onSetTheme }: Sh
                     </button>
                   </div>
 
+                  {job.articleSelection?.screenshotPath && (
+                    <div style={{ marginBottom: 14 }}>
+                      <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>Nuvarande screenshot</div>
+                      <img
+                        src={`/api/short-form/jobs/${job.id}/asset/article-mobile.png`}
+                        alt="Article screenshot"
+                        style={{ width: 120, borderRadius: 8, border: '1px solid var(--border)', display: 'block' }}
+                      />
+                    </div>
+                  )}
+
                   {(reviewCandidates.length > 0 ? reviewCandidates : job.articleSelection?.candidates ?? []).map((candidate) => (
-                    <div key={candidate.url} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12, marginBottom: 10, background: 'var(--surface)' }}>
-                      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>{candidate.title}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10, wordBreak: 'break-all' }}>{candidate.url}</div>
-                      <button
-                        type="button"
-                        onClick={() => void handleApproveArticle(candidate.url)}
-                        disabled={busyAction !== null}
-                        style={{ ...primaryButtonStyle, padding: '6px 12px', fontSize: 12 }}
-                      >
-                        {busyAction === 'approve' ? 'Godkänner…' : 'Godkänn och rendera om'}
-                      </button>
+                    <div key={candidate.url} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12, marginBottom: 10, background: 'var(--surface)', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>{candidate.title}</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10, wordBreak: 'break-all' }}>{candidate.url}</div>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <button
+                            type="button"
+                            onClick={() => void handlePreviewUrl(candidate.url)}
+                            disabled={busyPreview}
+                            style={{ ...secondaryButtonStyle, padding: '5px 10px', fontSize: 11 }}
+                          >
+                            {busyPreview ? 'Laddar…' : 'Förhandsgranska'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleApproveArticle(candidate.url)}
+                            disabled={busyAction !== null}
+                            style={{ ...primaryButtonStyle, padding: '5px 10px', fontSize: 11 }}
+                          >
+                            {busyAction === 'approve' ? 'Godkänner…' : 'Godkänn och rendera om'}
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   ))}
 

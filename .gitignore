@@ -25,3 +25,8 @@ Thumbs.db
 *.swp
 .vscode/
 .idea/
+data/u2net/
+video-pipeline/data/bg-output/
+video-pipeline/data/pipeline-state/
+app/*.tsbuildinfo
+*.tsbuildinfo
